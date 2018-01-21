@@ -539,64 +539,69 @@ class QLearningNetwork(bp.Policy):
         return
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        for i in range(NUM_ITERATIONS):
-            # find legal actions:
-            legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
-            legal_actions = np.reshape(legal_actions, (legal_actions.size,))
+        # find legal actions:
+        legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
+        legal_actions = np.reshape(legal_actions, (legal_actions.size,))
 
-            # [not sure necessary] ]in case of weird problems and draws (no legal actions):
-            if len(legal_actions) == 0:
-                return 0, 0
-            all_rewards = 0
-            d = False
-            j = 0
-            # The Q-Network
-            while j < 98:
-                j += 1
-                # Choose an action by greedily (with e chance of random action) from the Q-network
-                next_action, actions_prob_vec = self.session.run([self.y_argmax, self.y_logitis],
-                                                                 feed_dict={
-                                                                     self.x_input: new_state.reshape(-1, STATE_DIM)})
-                if np.random.rand(1) < self.epsilon:
-                    next_action = np.random.choice(legal_actions)  # random action
-                # Get new state and reward from environment
-                state_after_aciton = make_move(new_state.reshape(-1, STATE_DIM), next_action,
-                                               self.id)  # get new state for the action
-                reward_for_action = int(check_for_win(state_after_aciton, self.id, next_action))  # reward
-                # Obtain the Q' values by feeding the new state through our network
-                actions_prob_vec_after_playing = self.session.run(self.y_argmax,
-                                                                  feed_dict={self.x_input: state_after_aciton})
-                # Obtain maxQ' and set our target value for chosen action.
-                max_action_prob_after_playing = np.max(actions_prob_vec_after_playing)
-                actions_prob_vec[0, next_action[0]] = reward_for_action + GAMMA_FACTOR * max_action_prob_after_playing
-                # Train our network using target and predicted Q values
-                self.session.run([self.trainer, self.loss],
-                                 feed_dict={self.x_input: new_state, self.y_logitis: actions_prob_vec})
-                all_rewards += reward_for_action
-                new_state = state_after_aciton
-                if d:
-                    # Reduce chance of random action as we train the model.
-                    e = 1. / ((i / 50) + 10)
-                    break
-            self.steps_list.append(j)
-            self.rewards_list.append(all_rewards)
+        # [not sure necessary] ]in case of weird problems and draws (no legal actions):
+        if len(legal_actions) == 0:
+            return 0, 0
+        all_rewards = 0
+        # The Q-Network
+        # Choose an action by greedily (with e chance of random action) from the Q-network
+        prev_action_predicted, predicted_actions_prob_vec = \
+            self.session.run([self.y_argmax, self.y],
+                             feed_dict={
+                                 self.x_input: prev_state.reshape(-1,
+                                                                  STATE_DIM),
+                                 self.y: np.ones((1, 7))})
+        if np.random.rand(1) < self.epsilon:  # exploration
+            prev_action_predicted = np.random.choice(legal_actions)  # random action
+        # Get new state and reward from environment
+        elif prev_action_predicted not in legal_actions:
+            prev_action_predicted = np.random.choice(legal_actions)  # random action
+        state_after_predicted_action = make_move(prev_state, prev_action_predicted,
+                                                 self.id)  # get new state for the action
+        self.log("Before check for win, player:{}, action:{}".format(self.id, prev_action_predicted))
+        # is_win = check_for_win(state_after_predicted_action, self.id, prev_action_predicted)
+        reward_for_predicted_action = reward  # int(is_win)
+        # Obtain the Q' values by feeding the new state through our network
+        actions_prob_vec_after_playing = self.session.run(self.y,
+                                                          feed_dict={
+                                                              self.x_input: state_after_predicted_action.reshape(-1,
+                                                                                                                 INPUT_SIZE),
+                                                              self.y: np.ones((1, 7))})
+        # Obtain maxQ' and set our target value for chosen action.
+        max_action_prob_after_playing = np.max(actions_prob_vec_after_playing)
+        predicted_actions_prob_vec[
+            0, prev_action_predicted] = reward_for_predicted_action + GAMMA_FACTOR * max_action_prob_after_playing
+        # Train our network using target and predicted Q values
+        self.session.run([self.trainer, self.loss],
+                         feed_dict={self.x_input: new_state.reshape(-1, INPUT_SIZE),
+                                    self.y: predicted_actions_prob_vec})
+        all_rewards += reward_for_predicted_action
+        new_state = state_after_predicted_action
+        # TODO ADD LOOP TO LEARN THE NEW STATE IF THE GAME ISN'T OVER
+
+        # self.steps_list.append(j)
+        self.rewards_list.append(all_rewards)
         print("Percent of succesful episodes: " + str(sum(self.rewards_list) / NUM_ITERATIONS) + "%")
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        actions = np.zeros(NUM_ACTIONS, )
-        legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
-        legal_actions = actions + legal_actions
-        legal_actions = np.reshape(legal_actions, (legal_actions.size,))
+        temp_actions = np.ones((1, 7))
+        # legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
+        # legal_actions = np.reshape(legal_actions, (legal_actions.size,))
+        # TODO
 
         action = \
             self.session.run(self.y_argmax, feed_dict={self.x_input: new_state.reshape(-1, STATE_DIM),
-                                                       self.y_logitis: legal_actions[None, :].reshape(-1,
-                                                                                                      NUM_ACTIONS)})[0]
+                                                       self.y: temp_actions})[0]
 
-        if action in legal_actions and np.random.random() > self.epsilon:
-            return action
-        else:
-            return np.random.choice(legal_actions)
+        # if action in legal_actions and np.random.random() > self.epsilon:
+        #     return action
+        # else:
+        #     return np.random.choice(legal_actions)
+        return action
 
     def save_model(self):
         # return [self.session.run(self.W), self.session.run(self.b)], None

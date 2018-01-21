@@ -43,8 +43,8 @@ UNRESPONSIVE_PLAYER = "Unresponsive Player: the player hasn't responded in too l
 
 STATUS_SKIP = 100
 SELFPLAY_TIME = 10000
-TOO_SLOW_THRESHOLD = 10000#3 TODO dont forget to put back
-UNRESPONSIVE_THRESHOLD = 1000# 100 TODO dont forget to put back
+TOO_SLOW_THRESHOLD = 3
+UNRESPONSIVE_THRESHOLD = 100
 
 
 def clear_q(q):
@@ -701,9 +701,9 @@ def parse_args():
     g = p.add_argument_group('Game')
     g.add_argument('--policy_action_time', '-pat', type=float, default=0.0,
                    help='seconds to wait for agents to respond with actions')
-    g.add_argument('--policy_learn_time', '-plt', type=float, default=5, #0.2,
+    g.add_argument('--policy_learn_time', '-plt', type=float, default=0.4,
                    help='seconds to wait for agents to improve policy')
-    g.add_argument('--game_duration', '-D', type=int, default=100, help='number of rounds')
+    g.add_argument('--game_duration', '-D', type=int, default=1000, help='number of rounds')
     g.add_argument('--test_or_train', '-t', type=str, default='train',
                    help='whether this is a training session or a test session')
     g.add_argument('--board_initializer', '-bi', type=str, default='RandomBoard',
