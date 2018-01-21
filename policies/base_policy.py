@@ -52,7 +52,7 @@ class Policy(mp.Process):
     using queues.
     """
 
-    def __init__(self, policy_args, stateq, actq, modelq, logq, id, mode, game_duration):
+    def __init__(self, policy_args, stateq, actq, modelq, logq, id, mode, game_duration, eps=0.1):
         """
         initialize the policy.
         :param policy_args: the arguments for the specific policy to be added as members.
@@ -72,10 +72,11 @@ class Policy(mp.Process):
         self.id = id
         self.mode = mode
         self.game_duration = game_duration
+        self.epsilon = eps
         self.__dict__.update(self.cast_string_args(policy_args))
 
 
-    def log(self, msg, type=' '):
+    def log(self, msg, type='INFO'):
         """
         A logging function you can use for debugging and anything else you need.
         Given the message you want to log and its type, the function makes sure
