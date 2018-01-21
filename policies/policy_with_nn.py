@@ -7,7 +7,7 @@ from policies import base_policy as bp
 
 
 NUM_ITERATIONS = 1000
-FACTOR = 0.99
+GAMMA_FACTOR = 0.99
 NUM_ACTIONS = 7
 
 STATE_DIM = 7 * 6  # board size
@@ -25,13 +25,8 @@ COLS = 7
 WIN_MASK = np.ones(4)
 ACTIONS = [0, 1, 2, 3, 4, 5, 6]
 
+
 # parameters
-epsilon = .1  # exploration
-num_actions = 3  # [move_left, stay, move_right]
-max_memory = 500  # Maximum number of experiences we are storing
-hidden_size = 100  # Size of the hidden layers
-batch_size = 1  # Number of experiences we use for training per batch
-grid_size = 10  # Size of the playing field
 
 
 # Consts
@@ -559,25 +554,27 @@ class QLearningNetwork(bp.Policy):
             while j < 98:
                 j += 1
                 # Choose an action by greedily (with e chance of random action) from the Q-network
-                a, allQ = self.session.run([self.y_argmax, self.y_logitis],
-                                           feed_dict={self.x_input: np.identity(STATE_DIM)[new_state:new_state + 1]})
+                next_action, actions_prob_vec = self.session.run([self.y_argmax, self.y_logitis],
+                                                                 feed_dict={
+                                                                     self.x_input: new_state.reshape(-1, STATE_DIM)})
                 if np.random.rand(1) < self.epsilon:
-                    a = np.random.choice(legal_actions)  # random action
+                    next_action = np.random.choice(legal_actions)  # random action
                 # Get new state and reward from environment
-                s1 = make_move(new_state, a, self.id)  # get new state for the action
-                r = int(check_for_win(s1, self.id, a))  # reward
+                state_after_aciton = make_move(new_state.reshape(-1, STATE_DIM), next_action,
+                                               self.id)  # get new state for the action
+                reward_for_action = int(check_for_win(state_after_aciton, self.id, next_action))  # reward
                 # Obtain the Q' values by feeding the new state through our network
-                Q1 = self.session.run(self.y_argmax, feed_dict={self.x_input: np.identity(16)[s1:s1 + 1]})
+                actions_prob_vec_after_playing = self.session.run(self.y_argmax,
+                                                                  feed_dict={self.x_input: state_after_aciton})
                 # Obtain maxQ' and set our target value for chosen action.
-                maxQ1 = np.max(Q1)
-                targetQ = allQ
-                targetQ[0, a[0]] = r + FACTOR * maxQ1
+                max_action_prob_after_playing = np.max(actions_prob_vec_after_playing)
+                actions_prob_vec[0, next_action[0]] = reward_for_action + GAMMA_FACTOR * max_action_prob_after_playing
                 # Train our network using target and predicted Q values
                 self.session.run([self.trainer, self.loss],
-                                 feed_dict={self.x_input: np.identity(STATE_DIM)[s:s + 1], self.y_logitis: targetQ})
-                all_rewards += r
-                s = s1
-                if d == True:
+                                 feed_dict={self.x_input: new_state, self.y_logitis: actions_prob_vec})
+                all_rewards += reward_for_action
+                new_state = state_after_aciton
+                if d:
                     # Reduce chance of random action as we train the model.
                     e = 1. / ((i / 50) + 10)
                     break
@@ -586,11 +583,15 @@ class QLearningNetwork(bp.Policy):
         print("Percent of succesful episodes: " + str(sum(self.rewards_list) / NUM_ITERATIONS) + "%")
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
-
+        actions = np.zeros(NUM_ACTIONS, )
         legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
+        legal_actions = actions + legal_actions
         legal_actions = np.reshape(legal_actions, (legal_actions.size,))
 
-        action = self.session.run(self.y_argmax, feed_dict={self.x_input: legal_actions[None, :]})[0]
+        action = \
+            self.session.run(self.y_argmax, feed_dict={self.x_input: new_state.reshape(-1, STATE_DIM),
+                                                       self.y_logitis: legal_actions[None, :].reshape(-1,
+                                                                                                      NUM_ACTIONS)})[0]
 
         if action in legal_actions and np.random.random() > self.epsilon:
             return action
@@ -598,5 +599,5 @@ class QLearningNetwork(bp.Policy):
             return np.random.choice(legal_actions)
 
     def save_model(self):
-
-        return [self.session.run(self.W), self.session.run(self.b)], None
+        # return [self.session.run(self.W), self.session.run(self.b)], None
+        pass
