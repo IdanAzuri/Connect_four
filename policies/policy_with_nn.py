@@ -1,3 +1,5 @@
+import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -33,10 +35,10 @@ ACTIONS = [0, 1, 2, 3, 4, 5, 6]
 
 
 # Helper functions
-def weight_variable(shape):
+def weight_variable(shape, name):
     """weight_variable generates a weight variable of a given shape."""
     initial = tf.truncated_normal(shape, stddev=0.1)
-    return tf.Variable(initial)
+    return tf.Variable(initial, name=name)
 
 
 def bias_variable(shape):
@@ -489,11 +491,11 @@ def make_move(board, action, player_id):
 
 
 def deep_nn(X_input):
-    W1 = weight_variable([INPUT_SIZE, FC1])
+    W1 = weight_variable([INPUT_SIZE, FC1], name="W1")
     B1 = bias_variable([FC1])
-    W2 = weight_variable([FC1, FC2])
+    W2 = weight_variable([FC1, FC2], name="W2")
     B2 = bias_variable([FC2])
-    W3 = weight_variable([FC2, NUM_ACTIONS])
+    W3 = weight_variable([FC2, NUM_ACTIONS], name="W3")
     B3 = bias_variable([NUM_ACTIONS])
 
     # The model
@@ -510,16 +512,20 @@ def deep_nn(X_input):
 class QLearningNetwork(bp.Policy):
 
     def cast_string_args(self, policy_args):
-
+        # Example
         policy_args['depth'] = int(policy_args['depth']) if 'depth' in policy_args else 1
         return policy_args
 
-    def init_run(self, save_path=None, l_rate=1e-2):
+    def init_run(self, save_path=None, l_rate=1e-2, session=None):
 
         self.log("Creating model...")
-
         self.g = tf.Graph()
         with self.g.as_default():
+            self.session = tf.Session() if session is None else session
+            self.saver = None
+            # self.saver.restore(self.session, "/tmp/model.ckpt")
+            # self.log("The model restored successfully! W3={}".format(tf.get_variable("W3")))
+
             # tf Graph Input
             self.x_input = tf.placeholder(tf.float32, [None, STATE_DIM], name='input_data')
             # y is the next Q
@@ -533,10 +539,8 @@ class QLearningNetwork(bp.Policy):
             # create lists to contain total rewards and steps per episode
             self.steps_list = []
             self.rewards_list = []
-            self.session = tf.Session()
-            self.session.run(tf.global_variables_initializer())
 
-        return
+            self.session.run(tf.global_variables_initializer())
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
         # find legal actions:
@@ -544,35 +548,37 @@ class QLearningNetwork(bp.Policy):
         legal_actions = np.reshape(legal_actions, (legal_actions.size,))
 
         # [not sure necessary] ]in case of weird problems and draws (no legal actions):
-        if len(legal_actions) == 0:
-            return 0, 0
+        prev_action_predicted = 0
+        predicted_actions_prob_vec = np.random.randn(1, 7)
         all_rewards = 0
         # The Q-Network
-        for i in range(20):
-            # Choose an action by greedily (with e chance of random action) from the Q-network
-            prev_action_predicted, predicted_actions_prob_vec = \
-                self.session.run([self.y_argmax, self.y],
-                                 feed_dict={
-                                     self.x_input: prev_state.reshape(-1,
-                                                                      STATE_DIM),
-                                     self.y: np.ones((1, 7))})
-            if np.random.rand(1) < self.epsilon:  # exploration
-                prev_action_predicted = np.random.choice(legal_actions)  # random action
-            # Get new state and reward from environment
-            elif prev_action_predicted not in legal_actions:
-                prev_action_predicted = np.random.choice(legal_actions)  # random action
-            state_after_predicted_action = make_move(prev_state, prev_action_predicted,
-                                                     self.id)  # get new state for the action
+        # Choose an action by greedily (with e chance of random action) from the Q-network
+        try:
+            if prev_state is not None:
+                prev_action_predicted, predicted_actions_prob_vec = \
+                    self.session.run([self.y_argmax, self.y],
+                                     feed_dict={
+                                         self.x_input: prev_state.reshape(-1,
+                                                                          STATE_DIM),
+                                         self.y: np.ones((1, 7))})
+                if np.random.rand(1) < self.epsilon:  # exploration
+                    prev_action_predicted = np.random.choice(legal_actions)  # random action
+                # Get new state and reward from environment
+                elif prev_action_predicted not in legal_actions:
+                    prev_action_predicted = np.random.choice(legal_actions)  # random action
+                state_after_predicted_action = make_move(prev_state, prev_action_predicted,
+                                                         self.id)  # get new state for the action
+
             self.log("Before check for win, player:{}, action:{}".format(self.id, prev_action_predicted))
             is_win = check_for_win(state_after_predicted_action, self.id, int(prev_action_predicted))
             reward_for_predicted_action = int(is_win)
+
             # Obtain the Q' values by feeding the new state through our network
             actions_prob_vec_after_playing = self.session.run(self.y,
                                                               feed_dict={
                                                                   self.x_input: state_after_predicted_action.reshape(-1,
                                                                                                                      INPUT_SIZE),
                                                                   self.y: np.ones((1, 7))})
-
             # Obtain maxQ' and set our target value for chosen action.
             max_action_prob_after_playing = np.max(actions_prob_vec_after_playing)
             predicted_actions_prob_vec[
@@ -581,14 +587,20 @@ class QLearningNetwork(bp.Policy):
             self.session.run([self.trainer, self.loss],
                              feed_dict={self.x_input: new_state.reshape(-1, INPUT_SIZE),
                                         self.y: predicted_actions_prob_vec})
+            all_rewards += reward_for_predicted_action
+            new_state = state_after_predicted_action
+            # TODO ADD LOOP TO LEARN THE NEW STATE WHILE THE GAME ISN'T OVER
 
-        all_rewards += reward_for_predicted_action
-        new_state = state_after_predicted_action
-        # TODO ADD LOOP TO LEARN THE NEW STATE IF THE GAME ISN'T OVER
-
-        # self.steps_list.append(j)
-        self.rewards_list.append(all_rewards)
-        print("Percent of succesful episodes: " + str(sum(self.rewards_list) / NUM_ITERATIONS) + "%")
+            # self.steps_list.append(j)
+            self.rewards_list.append(all_rewards)
+            print(" SCORE: " + str(sum(self.rewards_list)))
+        except ValueError:
+            self.log("value error", "ERROR")
+        except IOError as e:
+            self.log("I/O error({0}): {1}".format(e.errno, e.strerror), "ERROR")
+        except:
+            self.log("Unexpected error:{}".format(sys.exc_info()[0]), "ERROR")
+            raise
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         temp_actions = np.ones((1, 7))
@@ -604,6 +616,38 @@ class QLearningNetwork(bp.Policy):
         else:
             return np.random.choice(legal_actions)
 
+    def load(self, path):
+        """Load weights or init variables if path==None."""
+
+        if self.saver is None:
+            self.saver = tf.train.Saver(max_to_keep=None)
+
+        if path is None:
+            self.session.run(tf.global_variables_initializer())
+            return 0
+        else:
+            p = Path(path)
+
+            files = p.glob("**/model.ckpt.meta")
+            newest = max(files, key=lambda p: p.stat().st_ctime)
+            fname = str(newest)[:-5]
+
+            self.saver.restore(self.session, fname)
+
+            return int(newest.parts[-2])
+
     def save_model(self):
-        # return [self.session.run(self.W), self.session.run(self.b)], None
-        pass
+        """Save the current graph."""
+
+        if self.saver is None:
+            with self.g.as_default():
+                self.saver = tf.train.Saver(max_to_keep=None)
+        save_path = "tmp/"
+        p = Path("tmp/")
+        p.mkdir(parents=True, exist_ok=True)
+
+        fname = str(p / "{}_".format(datetime.now()) / "model.ckpt")
+        self.saver.save(self.session, fname)
+        self.log("Model saved in file: %s" % save_path)
+
+        return
