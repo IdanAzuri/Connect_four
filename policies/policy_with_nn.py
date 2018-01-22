@@ -5,6 +5,8 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 
+
+np.random.seed(1231)
 from policies import base_policy as bp
 
 
@@ -544,41 +546,49 @@ class QLearningNetwork(bp.Policy):
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
         # find legal actions:
+
         legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
         legal_actions = np.reshape(legal_actions, (legal_actions.size,))
+        legal_actions_hot_vector = np.zeros((7,), dtype=np.int32)
+        legal_actions_hot_vector[legal_actions] = 1
+        if len(legal_actions) == 0: #maybe to learn a draw?
+            return
 
+        state_after_predicted_action = new_state
+        self.log("Actions={}".format(legal_actions_hot_vector))
         # [not sure necessary] ]in case of weird problems and draws (no legal actions):
         prev_action_predicted = 0
+        reward_for_predicted_action = reward  # maybe needed -1 need to think about it
         predicted_actions_prob_vec = np.random.randn(1, 7)
         all_rewards = 0
         # The Q-Network
         # Choose an action by greedily (with e chance of random action) from the Q-network
         try:
-            if prev_state is not None:
-                prev_action_predicted, predicted_actions_prob_vec = \
-                    self.session.run([self.y_argmax, self.y],
-                                     feed_dict={
-                                         self.x_input: prev_state.reshape(-1,
-                                                                          STATE_DIM),
-                                         self.y: np.ones((1, 7))})
-                if np.random.rand(1) < self.epsilon:  # exploration
-                    prev_action_predicted = np.random.choice(legal_actions)  # random action
-                # Get new state and reward from environment
-                elif prev_action_predicted not in legal_actions:
-                    prev_action_predicted = np.random.choice(legal_actions)  # random action
+            prev_action_predicted, predicted_actions_prob_vec = self.session.run([self.y_argmax, self.y],
+                                                                                 feed_dict={
+                                                                                     self.x_input: prev_state.reshape(
+                                                                                         -1, STATE_DIM),
+                                                                                     self.y: np.ones((1, 7))})
+            if np.random.rand(1) < self.epsilon:  # exploration
+                prev_action_predicted = np.random.choice(legal_actions)  # random action
+            # Get new state and reward from environment
+            elif int(prev_action_predicted) not in legal_actions:
+                prev_action_predicted = np.random.choice(legal_actions)  # random action
+            self.log("Real action:{}, predicted action:{}".format(prev_action, prev_action_predicted))
+            if int(prev_action_predicted) in legal_actions:  # if the action is ilegal learn the real game action and
+                #  reward
                 state_after_predicted_action = make_move(prev_state, prev_action_predicted,
                                                          self.id)  # get new state for the action
 
-            self.log("Before check for win, player:{}, action:{}".format(self.id, prev_action_predicted))
-            is_win = check_for_win(state_after_predicted_action, self.id, int(prev_action_predicted))
-            reward_for_predicted_action = int(is_win)
+                is_win = check_for_win(state_after_predicted_action, self.id, int(prev_action_predicted))
+                reward_for_predicted_action = int(is_win)
 
             # Obtain the Q' values by feeding the new state through our network
             actions_prob_vec_after_playing = self.session.run(self.y,
                                                               feed_dict={
                                                                   self.x_input: state_after_predicted_action.reshape(-1,
                                                                                                                      INPUT_SIZE),
-                                                                  self.y: np.ones((1, 7))})
+                                                                  self.y: predicted_actions_prob_vec})
             # Obtain maxQ' and set our target value for chosen action.
             max_action_prob_after_playing = np.max(actions_prob_vec_after_playing)
             predicted_actions_prob_vec[
@@ -594,10 +604,18 @@ class QLearningNetwork(bp.Policy):
             # self.steps_list.append(j)
             self.rewards_list.append(all_rewards)
             print(" SCORE: " + str(sum(self.rewards_list)))
-        except ValueError:
-            self.log("value error", "ERROR")
+        except ValueError as e:
+            self.log("ValueError error({0})".format(e), "ERROR")
+            print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
+            print("prev_state:{}, prev_action_predicted:{}".format(prev_state, prev_action_predicted))
         except IOError as e:
             self.log("I/O error({0}): {1}".format(e.errno, e.strerror), "ERROR")
+            print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
+        except IndexError as e:
+            self.log("IndexError,prev_state:{}, prev_action_predicted:{}, error({0})".format(prev_state,
+                                                                                             prev_action_predicted,
+                                                                                             e), "ERROR")
+            print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
         except:
             self.log("Unexpected error:{}".format(sys.exc_info()[0]), "ERROR")
             raise
@@ -606,12 +624,14 @@ class QLearningNetwork(bp.Policy):
         temp_actions = np.ones((1, 7))
         legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
         legal_actions = np.reshape(legal_actions, (legal_actions.size,))
+        # legal_actions_hot_vector = np.zeros((7,), dtype=np.int32)
+        # legal_actions_hot_vector[legal_actions] = 1
 
         action = \
             self.session.run(self.y_argmax, feed_dict={self.x_input: new_state.reshape(-1, STATE_DIM),
                                                        self.y: temp_actions})[0]
 
-        if action in legal_actions and np.random.random() > self.epsilon:
+        if action in legal_actions:  # and np.random.random() > self.epsilon:
             return action
         else:
             return np.random.choice(legal_actions)

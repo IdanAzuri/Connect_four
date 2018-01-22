@@ -52,7 +52,7 @@ class Policy(mp.Process):
     using queues.
     """
 
-    def __init__(self, policy_args, stateq, actq, modelq, logq, id, mode, game_duration, eps=0):
+    def __init__(self, policy_args, stateq, actq, modelq, logq, id, mode, game_duration, eps=0.1):
         """
         initialize the policy.
         :param policy_args: the arguments for the specific policy to be added as members.
