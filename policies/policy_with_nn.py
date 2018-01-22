@@ -563,8 +563,8 @@ class QLearningNetwork(bp.Policy):
         state_after_predicted_action = make_move(prev_state, prev_action_predicted,
                                                  self.id)  # get new state for the action
         self.log("Before check for win, player:{}, action:{}".format(self.id, prev_action_predicted))
-        # is_win = check_for_win(state_after_predicted_action, self.id, prev_action_predicted)
-        reward_for_predicted_action = reward  # int(is_win)
+        is_win = check_for_win(state_after_predicted_action, self.id, int(prev_action_predicted))
+        reward_for_predicted_action = int(is_win)
         # Obtain the Q' values by feeding the new state through our network
         actions_prob_vec_after_playing = self.session.run(self.y,
                                                           feed_dict={
@@ -589,19 +589,17 @@ class QLearningNetwork(bp.Policy):
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         temp_actions = np.ones((1, 7))
-        # legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
-        # legal_actions = np.reshape(legal_actions, (legal_actions.size,))
-        # TODO
+        legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
+        legal_actions = np.reshape(legal_actions, (legal_actions.size,))
 
         action = \
             self.session.run(self.y_argmax, feed_dict={self.x_input: new_state.reshape(-1, STATE_DIM),
                                                        self.y: temp_actions})[0]
 
-        # if action in legal_actions and np.random.random() > self.epsilon:
-        #     return action
-        # else:
-        #     return np.random.choice(legal_actions)
-        return action
+        if action in legal_actions and np.random.random() > self.epsilon:
+            return action
+        else:
+            return np.random.choice(legal_actions)
 
     def save_model(self):
         # return [self.session.run(self.W), self.session.run(self.b)], None

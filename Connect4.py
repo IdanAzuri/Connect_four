@@ -699,9 +699,9 @@ def parse_args():
                    help='seconds to wait between actions when a game is being played back')
 
     g = p.add_argument_group('Game')
-    g.add_argument('--policy_action_time', '-pat', type=float, default=0.0,
+    g.add_argument('--policy_action_time', '-pat', type=float, default=0.01,
                    help='seconds to wait for agents to respond with actions')
-    g.add_argument('--policy_learn_time', '-plt', type=float, default=0.4,
+    g.add_argument('--policy_learn_time', '-plt', type=float, default=0.2,
                    help='seconds to wait for agents to improve policy')
     g.add_argument('--game_duration', '-D', type=int, default=1000, help='number of rounds')
     g.add_argument('--test_or_train', '-t', type=str, default='train',
