@@ -1,5 +1,5 @@
+import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -541,8 +541,8 @@ class QLearningNetwork(bp.Policy):
             # create lists to contain total rewards and steps per episode
             self.steps_list = []
             self.rewards_list = []
-
-            self.session.run(tf.global_variables_initializer())
+            self.load()
+            # self.session.run(tf.global_variables_initializer())
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
         # find legal actions:
@@ -551,7 +551,7 @@ class QLearningNetwork(bp.Policy):
         legal_actions = np.reshape(legal_actions, (legal_actions.size,))
         legal_actions_hot_vector = np.zeros((7,), dtype=np.int32)
         legal_actions_hot_vector[legal_actions] = 1
-        if len(legal_actions) == 0: #maybe to learn a draw?
+        if len(legal_actions) == 0:  # maybe to learn a draw?
             return
 
         state_after_predicted_action = new_state
@@ -636,13 +636,13 @@ class QLearningNetwork(bp.Policy):
         else:
             return np.random.choice(legal_actions)
 
-    def load(self, path):
+    def load(self, path="tmp/"):
         """Load weights or init variables if path==None."""
 
         if self.saver is None:
             self.saver = tf.train.Saver(max_to_keep=None)
 
-        if path is None:
+        if not os.listdir(path):
             self.session.run(tf.global_variables_initializer())
             return 0
         else:
@@ -656,17 +656,17 @@ class QLearningNetwork(bp.Policy):
 
             return int(newest.parts[-2])
 
-    def save_model(self):
+    def save_model(self, save_path="tmp/"):
         """Save the current graph."""
 
         if self.saver is None:
             with self.g.as_default():
                 self.saver = tf.train.Saver(max_to_keep=None)
-        save_path = "tmp/"
-        p = Path("tmp/")
+
+        p = Path(save_path)
         p.mkdir(parents=True, exist_ok=True)
 
-        fname = str(p / "{}_".format(datetime.now()) / "model.ckpt")
+        fname = str(p / "{:04d}".format(self.game_duration) / "model.ckpt")
         self.saver.save(self.session, fname)
         self.log("Model saved in file: %s" % save_path)
 
