@@ -548,37 +548,40 @@ class QLearningNetwork(bp.Policy):
             return 0, 0
         all_rewards = 0
         # The Q-Network
-        # Choose an action by greedily (with e chance of random action) from the Q-network
-        prev_action_predicted, predicted_actions_prob_vec = \
-            self.session.run([self.y_argmax, self.y],
-                             feed_dict={
-                                 self.x_input: prev_state.reshape(-1,
-                                                                  STATE_DIM),
-                                 self.y: np.ones((1, 7))})
-        if np.random.rand(1) < self.epsilon:  # exploration
-            prev_action_predicted = np.random.choice(legal_actions)  # random action
-        # Get new state and reward from environment
-        elif prev_action_predicted not in legal_actions:
-            prev_action_predicted = np.random.choice(legal_actions)  # random action
-        state_after_predicted_action = make_move(prev_state, prev_action_predicted,
-                                                 self.id)  # get new state for the action
-        self.log("Before check for win, player:{}, action:{}".format(self.id, prev_action_predicted))
-        is_win = check_for_win(state_after_predicted_action, self.id, int(prev_action_predicted))
-        reward_for_predicted_action = int(is_win)
-        # Obtain the Q' values by feeding the new state through our network
-        actions_prob_vec_after_playing = self.session.run(self.y,
-                                                          feed_dict={
-                                                              self.x_input: state_after_predicted_action.reshape(-1,
-                                                                                                                 INPUT_SIZE),
-                                                              self.y: np.ones((1, 7))})
-        # Obtain maxQ' and set our target value for chosen action.
-        max_action_prob_after_playing = np.max(actions_prob_vec_after_playing)
-        predicted_actions_prob_vec[
-            0, prev_action_predicted] = reward_for_predicted_action + GAMMA_FACTOR * max_action_prob_after_playing
-        # Train our network using target and predicted Q values
-        self.session.run([self.trainer, self.loss],
-                         feed_dict={self.x_input: new_state.reshape(-1, INPUT_SIZE),
-                                    self.y: predicted_actions_prob_vec})
+        for i in range(20):
+            # Choose an action by greedily (with e chance of random action) from the Q-network
+            prev_action_predicted, predicted_actions_prob_vec = \
+                self.session.run([self.y_argmax, self.y],
+                                 feed_dict={
+                                     self.x_input: prev_state.reshape(-1,
+                                                                      STATE_DIM),
+                                     self.y: np.ones((1, 7))})
+            if np.random.rand(1) < self.epsilon:  # exploration
+                prev_action_predicted = np.random.choice(legal_actions)  # random action
+            # Get new state and reward from environment
+            elif prev_action_predicted not in legal_actions:
+                prev_action_predicted = np.random.choice(legal_actions)  # random action
+            state_after_predicted_action = make_move(prev_state, prev_action_predicted,
+                                                     self.id)  # get new state for the action
+            self.log("Before check for win, player:{}, action:{}".format(self.id, prev_action_predicted))
+            is_win = check_for_win(state_after_predicted_action, self.id, int(prev_action_predicted))
+            reward_for_predicted_action = int(is_win)
+            # Obtain the Q' values by feeding the new state through our network
+            actions_prob_vec_after_playing = self.session.run(self.y,
+                                                              feed_dict={
+                                                                  self.x_input: state_after_predicted_action.reshape(-1,
+                                                                                                                     INPUT_SIZE),
+                                                                  self.y: np.ones((1, 7))})
+
+            # Obtain maxQ' and set our target value for chosen action.
+            max_action_prob_after_playing = np.max(actions_prob_vec_after_playing)
+            predicted_actions_prob_vec[
+                0, prev_action_predicted] = reward_for_predicted_action + GAMMA_FACTOR * max_action_prob_after_playing
+            # Train our network using target and predicted Q values
+            self.session.run([self.trainer, self.loss],
+                             feed_dict={self.x_input: new_state.reshape(-1, INPUT_SIZE),
+                                        self.y: predicted_actions_prob_vec})
+
         all_rewards += reward_for_predicted_action
         new_state = state_after_predicted_action
         # TODO ADD LOOP TO LEARN THE NEW STATE IF THE GAME ISN'T OVER
