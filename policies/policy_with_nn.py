@@ -17,9 +17,10 @@ NUM_ACTIONS = 7
 STATE_DIM = 7 * 6  # board size
 
 INPUT_SIZE = STATE_DIM
-FC1 = 30
-FC2 = 20
-FC3 = 60
+FC1 = 256
+FC2 = 128
+FC3 = 64
+FC4 = 32
 EMPTY_VAL = 0
 PLAYER1_ID = 1
 PLAYER2_ID = 2
@@ -497,15 +498,21 @@ def deep_nn(X_input):
     B1 = bias_variable([FC1])
     W2 = weight_variable([FC1, FC2], name="W2")
     B2 = bias_variable([FC2])
-    W3 = weight_variable([FC2, NUM_ACTIONS], name="W3")
-    B3 = bias_variable([NUM_ACTIONS])
+    W3 = weight_variable([FC2, FC3], name="W3")
+    B3 = bias_variable([FC3])
+    W4 = weight_variable([FC3, FC4], name="W4")
+    B4 = bias_variable([FC4])
+    W_LAST_LAYER = weight_variable([FC4, NUM_ACTIONS], name="W_LAST_LAYER")
+    B_LAST_LAYER = bias_variable([NUM_ACTIONS])
 
     # The model
     with tf.name_scope('reshape'):
         X_input = tf.reshape(X_input, [-1, INPUT_SIZE])
-        Y1 = tf.nn.relu(tf.matmul(X_input, W1) + B1)
-        Y2 = tf.nn.tanh(tf.matmul(Y1, W2) + B2)
-        Y_logitis = tf.matmul(Y2, W3) + B3
+        Y1 = tf.nn.leaky_relu(tf.matmul(X_input, W1) + B1)
+        Y2 = tf.nn.leaky_relu(tf.matmul(Y1, W2) + B2)
+        Y3 = tf.nn.leaky_relu(tf.matmul(Y2, W3) + B3)
+        Y4 = tf.nn.tanh(tf.matmul(Y3, W4) + B4)
+        Y_logitis = tf.matmul(Y4, W_LAST_LAYER) + B_LAST_LAYER
         predict = tf.argmax(Y_logitis, 1)
 
     return Y_logitis, predict
@@ -558,17 +565,19 @@ class QLearningNetwork(bp.Policy):
         self.log("Actions={}".format(legal_actions_hot_vector), "DEBUG")
         # [not sure necessary] ]in case of weird problems and draws (no legal actions):
         prev_action_predicted = 0
-        reward_for_predicted_action = reward  # maybe needed -1 need to think about it
+        reward_for_predicted_action = -1  # punishment for illegal cation
         predicted_actions_prob_vec = np.random.randn(1, 7)
         all_rewards = 0
+        is_win = 0
         # The Q-Network
         # Choose an action by greedily (with e chance of random action) from the Q-network
         try:
-            prev_action_predicted, predicted_actions_prob_vec = self.session.run([self.y_argmax, self.y],
-                                                                                 feed_dict={
-                                                                                     self.x_input: prev_state.reshape(
-                                                                                         -1, STATE_DIM),
-                                                                                     self.y: np.ones((1, 7))})
+            prev_action_predicted, predicted_actions_prob_vec = \
+                self.session.run([self.y_argmax, self.y_logitis],
+                                 feed_dict={
+                                     self.x_input: prev_state.reshape(
+                                         -1, STATE_DIM),
+                                     self.y: np.ones((1, 7))})
             if np.random.rand(1) < self.epsilon:  # exploration
                 prev_action_predicted = np.random.choice(legal_actions)  # random action
             # Get new state and reward from environment
@@ -582,9 +591,11 @@ class QLearningNetwork(bp.Policy):
 
                 is_win = check_for_win(state_after_predicted_action, self.id, int(prev_action_predicted))
                 reward_for_predicted_action = int(is_win)
+                if reward_for_predicted_action < reward:  # penalized if you could win but you didn't win
+                    reward_for_predicted_action = -1
 
             # Obtain the Q' values by feeding the new state through our network
-            actions_prob_vec_after_playing = self.session.run(self.y,
+            actions_prob_vec_after_playing = self.session.run(self.y_logitis,
                                                               feed_dict={
                                                                   self.x_input: state_after_predicted_action.reshape(-1,
                                                                                                                      INPUT_SIZE),
@@ -592,9 +603,18 @@ class QLearningNetwork(bp.Policy):
             # Obtain maxQ' and set our target value for chosen action.
             max_action_prob_after_playing = np.max(actions_prob_vec_after_playing)
             self.log("prob vector={}".format(actions_prob_vec_after_playing), "DEBUG")
+            self.log("predicted_actions_prob_vec before boost prob vector={}".format(predicted_actions_prob_vec),
+                     "DEBUG")
             predicted_actions_prob_vec[0, prev_action_predicted] = \
                 reward_for_predicted_action + GAMMA_FACTOR * max_action_prob_after_playing
-
+            if reward == -1:
+                predicted_actions_prob_vec[0, prev_action] = -1 + GAMMA_FACTOR * predicted_actions_prob_vec[
+                    0, prev_action]
+                self.log("PUNISHED for action={}".format(prev_action))
+            self.log("Boosted prob vector={}".format(predicted_actions_prob_vec), "DEBUG")
+            self.log("is_win={},reward={},reward_for_predicted_action={}\n".format(is_win, reward,
+                                                                                   reward_for_predicted_action),
+                     "DEBUG")
             # Trying Temporal_difference_learning
             # https://en.wikipedia.org/wiki/Temporal_difference_learning
             # predicted_actions_prob_vec[
