@@ -115,7 +115,7 @@ class Policy(mp.Process):
                 else:
                     round, prev_state, prev_action, reward, new_state, is_game_over, too_slow = input
                     if is_game_over:
-                        if self.mode == 'train':
+                        if self.mode == 'train' and prev_state is not None:
                             self.learn(round, prev_state, prev_action, reward, new_state, too_slow)
                     else:
                         self.aq.put((round, self.act(round, prev_state, prev_action, reward, new_state, too_slow)))
