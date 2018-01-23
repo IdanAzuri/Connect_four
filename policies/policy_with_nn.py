@@ -152,8 +152,8 @@ class ExperienceReplay(object):
         memory_len = len(self.memory)
         # indices_permutation = np.random.permutation(memory_len)[:min(batch_size,memory_len)]
         shuffle_indices = np.arange(memory_len)
-        np.random.shuffle(shuffle_indices) # get shuffled batch
-        return self.memory[shuffle_indices]
+        np.random.shuffle(shuffle_indices)  # get shuffled batch
+        return np.asarray(self.memory)[shuffle_indices]
 
 
 def check_for_win(board, player_id, col):
@@ -278,102 +278,113 @@ class QLearningNetwork(bp.Policy):
         legal_actions = np.reshape(legal_actions, (legal_actions.size,))
         legal_actions_hot_vector = np.zeros((7,), dtype=np.int32)
         legal_actions_hot_vector[legal_actions] = 1
+        self.batch_size = 64
+        self.ex_replay.store([prev_state, prev_action, reward, new_state], int(reward))
+        x_batch = self.ex_replay.get_batch(batch_size=self.batch_size)
+        for i, v in enumerate(x_batch):
+            prev_state, prev_action, reward, new_state = v[0]
+            if prev_state is None:
+                break
+            self.log("Iteration: {}/{}, round:{}".format(i, self.batch_size, round))
+            state_after_predicted_action = new_state
+            self.log("Actions={}".format(legal_actions_hot_vector), "DEBUG")
+            # [not sure necessary] ]in case of weird problems and draws (no legal actions):
+            prev_action_predicted = 0
+            reward_for_predicted_action = -1  # punishment for illegal cation
+            predicted_actions_prob_vec = np.random.randn(1, 7)
+            all_rewards = 0
+            is_win = 0
+            # The Q-Network
+            # Choose an action by greedily (with e chance of random action) from the Q-network
+            try:
+                prev_action_predicted, predicted_actions_prob_vec = \
+                    self.session.run([self.y_argmax, self.y_logitis],
+                                     feed_dict={
+                                         self.x_input: prev_state.reshape(
+                                             -1, STATE_DIM),
+                                         self.y: np.ones((1, 7))})
+                if np.random.rand(1) < self.epsilon:  # exploration
+                    prev_action_predicted = np.random.choice(legal_actions)  # random action
+                # Get new state and reward from environment
+                elif int(prev_action_predicted) not in legal_actions:
+                    prev_action_predicted = np.random.choice(legal_actions)  # random action
+                self.log("Real action:{}, predicted action:{}".format(prev_action, prev_action_predicted), "DEBUG")
+                if int(
+                        prev_action_predicted) in legal_actions:  # if the action is ilegal learn the real game
+                    # action and
+                    #  reward
+                    state_after_predicted_action = make_move(prev_state, prev_action_predicted,
+                                                             self.id)  # get new state for the action
 
-        x_batch = self.ex_replay.get_batch()
-        state_after_predicted_action = new_state
-        self.log("Actions={}".format(legal_actions_hot_vector), "DEBUG")
-        # [not sure necessary] ]in case of weird problems and draws (no legal actions):
-        prev_action_predicted = 0
-        reward_for_predicted_action = -1  # punishment for illegal cation
-        predicted_actions_prob_vec = np.random.randn(1, 7)
-        all_rewards = 0
-        is_win = 0
-        # The Q-Network
-        # Choose an action by greedily (with e chance of random action) from the Q-network
-        try:
-            prev_action_predicted, predicted_actions_prob_vec = \
-                self.session.run([self.y_argmax, self.y_logitis],
-                                 feed_dict={
-                                     self.x_input: prev_state.reshape(
-                                         -1, STATE_DIM),
-                                     self.y: np.ones((1, 7))})
-            if np.random.rand(1) < self.epsilon:  # exploration
-                prev_action_predicted = np.random.choice(legal_actions)  # random action
-            # Get new state and reward from environment
-            elif int(prev_action_predicted) not in legal_actions:
-                prev_action_predicted = np.random.choice(legal_actions)  # random action
-            self.log("Real action:{}, predicted action:{}".format(prev_action, prev_action_predicted), "DEBUG")
-            if int(prev_action_predicted) in legal_actions:  # if the action is ilegal learn the real game action and
-                #  reward
-                state_after_predicted_action = make_move(prev_state, prev_action_predicted,
-                                                         self.id)  # get new state for the action
+                    is_win = check_for_win(state_after_predicted_action, self.id, int(prev_action_predicted))
+                    reward_for_predicted_action = int(is_win)
+                    if reward_for_predicted_action < reward:  # penalized if you could win but you didn't win
+                        reward_for_predicted_action = -1
 
-                is_win = check_for_win(state_after_predicted_action, self.id, int(prev_action_predicted))
-                reward_for_predicted_action = int(is_win)
-                if reward_for_predicted_action < reward:  # penalized if you could win but you didn't win
-                    reward_for_predicted_action = -1
+                # Obtain the Q' values by feeding the new state through our network
+                actions_prob_vec_after_playing = self.session.run(self.y_logitis,
+                                                                  feed_dict={
+                                                                      self.x_input:
+                                                                          state_after_predicted_action.reshape(
+                                                                              -1,
+                                                                              INPUT_SIZE),
+                                                                      self.y: predicted_actions_prob_vec})
+                # Obtain maxQ' and set our target value for chosen action.
+                max_action_prob_after_playing = np.max(actions_prob_vec_after_playing)
+                self.log("prob vector={}".format(actions_prob_vec_after_playing), "DEBUG")
+                self.log("predicted_actions_prob_vec before boost prob vector={}".format(predicted_actions_prob_vec),
+                         "DEBUG")
+                predicted_actions_prob_vec[0, prev_action_predicted] = \
+                    reward_for_predicted_action + GAMMA_FACTOR * max_action_prob_after_playing
+                if reward == -1:
+                    predicted_actions_prob_vec[0, prev_action] = -1 + GAMMA_FACTOR * predicted_actions_prob_vec[
+                        0, prev_action]
+                    self.log("PUNISHED for action={}".format(prev_action))
+                self.log("Boosted prob vector={}".format(predicted_actions_prob_vec), "DEBUG")
+                self.log("is_win={},reward={},reward_for_predicted_action={}\n".format(is_win, reward,
+                                                                                       reward_for_predicted_action),
+                         "DEBUG")
+                # Trying Temporal_difference_learning
+                # https://en.wikipedia.org/wiki/Temporal_difference_learning
+                # predicted_actions_prob_vec[
+                #     0, prev_action_predicted] = GAMMA_FACTOR * (
+                #         reward_for_predicted_action + max_action_prob_after_playing) - np.max(
+                # predicted_actions_prob_vec)
+                # Train our network using target and predicted Q values
+                self.session.run([self.trainer, self.loss],
+                                 feed_dict={self.x_input: new_state.reshape(-1, INPUT_SIZE),
+                                            self.y: predicted_actions_prob_vec})
+                # TODO Learnig from real game parameters, combine it to a dictionary to feed the model once
+                # Learning wins
+                # if reward == 1:
+                #     real_prob_vector =np.zeros((1,7))
+                #     real_prob_vector[prev_action] = 1  # set the win in 1 hot vector
+                #     self.session.run([self.trainer, self.loss],
+                #                      feed_dict={self.x_input: new_state.reshape(-1, INPUT_SIZE),
+                #                                 self.y: real_prob_vector})
+                all_rewards += reward_for_predicted_action
+                new_state = state_after_predicted_action
 
-            # Obtain the Q' values by feeding the new state through our network
-            actions_prob_vec_after_playing = self.session.run(self.y_logitis,
-                                                              feed_dict={
-                                                                  self.x_input: state_after_predicted_action.reshape(-1,
-                                                                                                                     INPUT_SIZE),
-                                                                  self.y: predicted_actions_prob_vec})
-            # Obtain maxQ' and set our target value for chosen action.
-            max_action_prob_after_playing = np.max(actions_prob_vec_after_playing)
-            self.log("prob vector={}".format(actions_prob_vec_after_playing), "DEBUG")
-            self.log("predicted_actions_prob_vec before boost prob vector={}".format(predicted_actions_prob_vec),
-                     "DEBUG")
-            predicted_actions_prob_vec[0, prev_action_predicted] = \
-                reward_for_predicted_action + GAMMA_FACTOR * max_action_prob_after_playing
-            if reward == -1:
-                predicted_actions_prob_vec[0, prev_action] = -1 + GAMMA_FACTOR * predicted_actions_prob_vec[
-                    0, prev_action]
-                self.log("PUNISHED for action={}".format(prev_action))
-            self.log("Boosted prob vector={}".format(predicted_actions_prob_vec), "DEBUG")
-            self.log("is_win={},reward={},reward_for_predicted_action={}\n".format(is_win, reward,
-                                                                                   reward_for_predicted_action),
-                     "DEBUG")
-            # Trying Temporal_difference_learning
-            # https://en.wikipedia.org/wiki/Temporal_difference_learning
-            # predicted_actions_prob_vec[
-            #     0, prev_action_predicted] = GAMMA_FACTOR * (
-            #         reward_for_predicted_action + max_action_prob_after_playing) - np.max(predicted_actions_prob_vec)
-            # Train our network using target and predicted Q values
-            self.session.run([self.trainer, self.loss],
-                             feed_dict={self.x_input: new_state.reshape(-1, INPUT_SIZE),
-                                        self.y: predicted_actions_prob_vec})
-            # TODO Learnig from real game parameters, combine it to a dictionary to feed the model once
-            # Learning wins
-            # if reward == 1:
-            #     real_prob_vector =np.zeros((1,7))
-            #     real_prob_vector[prev_action] = 1  # set the win in 1 hot vector
-            #     self.session.run([self.trainer, self.loss],
-            #                      feed_dict={self.x_input: new_state.reshape(-1, INPUT_SIZE),
-            #                                 self.y: real_prob_vector})
-            all_rewards += reward_for_predicted_action
-            new_state = state_after_predicted_action
-
-            # self.steps_list.append(j)
-            self.rewards_list.append(all_rewards)
-            print(" SCORE: " + str(sum(self.rewards_list)))
-            if self.rewards_list == 10:
-                self.save_model()
-        except ValueError as e:
-            self.log("ValueError error({0})".format(e), "ERROR")
-            print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
-            print("prev_state:{}, prev_action_predicted:{}".format(prev_state, prev_action_predicted))
-        except IOError as e:
-            self.log("I/O error({0}): {1}".format(e.errno, e.strerror), "ERROR")
-            print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
-        except IndexError as e:
-            self.log("IndexError,prev_state:{}, prev_action_predicted:{}, error({0})".format(prev_state,
-                                                                                             prev_action_predicted,
-                                                                                             e), "ERROR")
-            print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
-        except:
-            self.log("Unexpected error:{}".format(sys.exc_info()[0]), "ERROR")
-            raise
+                # self.steps_list.append(j)
+                self.rewards_list.append(all_rewards)
+                print(" SCORE: " + str(sum(self.rewards_list)))
+                if self.rewards_list == 10:
+                    self.save_model()
+            except ValueError as e:
+                self.log("ValueError error({0})".format(e), "ERROR")
+                print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
+                print("prev_state:{}, prev_action_predicted:{}".format(prev_state, prev_action_predicted))
+            except IOError as e:
+                self.log("I/O error({0}): {1}".format(e.errno, e.strerror), "ERROR")
+                print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
+            except IndexError as e:
+                self.log("IndexError,prev_state:{}, prev_action_predicted:{}, error({0})".format(prev_state,
+                                                                                                 prev_action_predicted,
+                                                                                                 e), "ERROR")
+                print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
+            except:
+                self.log("Unexpected error:{}".format(sys.exc_info()[0]), "ERROR")
+                raise
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         temp_actions = np.random.randn(1, 7)
@@ -381,7 +392,7 @@ class QLearningNetwork(bp.Policy):
         legal_actions = np.reshape(legal_actions, (legal_actions.size,))
         # legal_actions_hot_vector = np.zeros((7,), dtype=np.int32)
         # legal_actions_hot_vector[legal_actions] = 1
-        self.ex_replay.store([prev_state, prev_action, reward, new_state], bool(reward))
+        self.ex_replay.store([prev_state, prev_action, reward, new_state], int(reward))
         # TODO maybe to change y argument (tmp_actions)
         action = \
             self.session.run(self.y_argmax, feed_dict={self.x_input: new_state.reshape(-1, STATE_DIM),
