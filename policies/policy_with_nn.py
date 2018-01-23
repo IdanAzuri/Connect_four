@@ -24,7 +24,7 @@ FC4 = 32
 EMPTY_VAL = 0
 PLAYER1_ID = 1
 PLAYER2_ID = 2
-
+MAX_HISTORY_SIZE = 100
 ROWS = 6
 COLS = 7
 WIN_MASK = np.ones(4)
@@ -286,6 +286,101 @@ class NeuralNetwork:
                                       feed_dict, batch_size).mean()
 
 
+class ExperienceReplay(object):
+    """
+    During gameplay all the experiences < s, a, r, s’ > are stored in a replay memory. 
+    In training, batches of randomly drawn experiences are used to generate the input and target for training.
+    """
+
+    def __init__(self, session, x, y, y_logic, max_memory=100, discount=GAMMA_FACTOR):
+        """
+        Setup
+        max_memory: the maximum number of experiences we want to store
+        memory: a list of experiences
+        discount: the discount factor for future experience
+
+        In the memory the information whether the game ended at the state is stored seperately in a nested array
+        [...
+        [experience, game_over]
+        [experience, game_over]
+        ...]
+        """
+        self.x_input_ = x
+        self.y_ = y
+        self.session_ = session
+        self.y_logic_ = y_logic
+        self.max_memory = max_memory
+        self.memory = list()  # TODO make dictionary
+        self.discount = GAMMA_FACTOR
+
+    def remember(self, states, game_over):
+        # Save a state to memory, game over = 1 otherwise 0
+        self.memory.append([states, game_over])
+        # We don't want to store infinite memories, so if we have too many, we just delete the oldest one
+        if len(self.memory) > self.max_memory:
+            del self.memory[0]
+
+    def get_batch(self, batch_size=10):
+
+        # How many experiences do we have?
+        len_memory = len(self.memory)
+
+        # Calculate the number of actions that can possibly be taken in the game
+        num_actions = NUM_ACTIONS
+
+        # Dimensions of the game field
+        env_dim = INPUT_SIZE
+
+        # We want to return an input and target vector with inputs from an observed state...
+        inputs = np.zeros((min(len_memory, batch_size), env_dim))
+
+        # ...and the target r + gamma * max Q(s’,a’)
+        # Note that our target is a matrix, with possible fields not only for the action taken but also
+        # for the other possible actions. The actions not take the same value as the prediction to not affect them
+        targets = np.zeros((inputs.shape[0], num_actions))
+
+        # We draw states to learn from randomly
+        for i, idx in enumerate(np.random.randint(0, len_memory,
+                                                  size=inputs.shape[0])):
+            """
+            Here we load one transition <s, a, r, s’> from memory
+            state_t: prev state s
+            action_t: action taken a
+            reward_t: reward earned r
+            state_tp1: the state that followed s’
+            """
+            state_t, action_t, reward_t, state_tp1 = self.memory[idx][0]
+
+            # We also need to know whether the game ended at this state
+            game_over = self.memory[idx][1]
+
+            # add the state s to the input
+            inputs[i:i + 1] = state_t
+
+
+            # First we fill the target values with the predictions of the model.
+            # They will not be affected by training (since the training loss for them is 0)
+            # prev_action_predicted, predicted_actions_prob_vec
+            prev_action_predicted, targets[i] = self.session_.run(self.y_logic_, self.y_, feed_dic={
+                self.x_input_: state_t.reshape(
+                    -1, STATE_DIM), self.y_: np.ones((1, 7))})[0]
+
+            """
+            If the game ended, the expected reward Q(s,a) should be the final reward r.
+            Otherwise the target value is r + gamma * max Q(s’,a’)
+            """
+            #  Here Q_sa is max_a'Q(s', a')
+            Q_sa = np.max(self.session_.predict(state_tp1)[0])
+
+            # if the game ended, the reward is the final reward
+            if game_over:  # if game_over is True
+                targets[i, action_t] = reward_t
+            else:
+                # r + gamma * max Q(s’,a’)
+                targets[i, action_t] = reward_t + GAMMA_FACTOR * Q_sa
+        return inputs, targets
+
+
 class ReplayDB:
     """Holds previous games and allows sampling random combinations of
         (state, action, new state, reward)
@@ -302,8 +397,8 @@ class ReplayDB:
             ("s1", np.float32, self.state_dim),
             ("s2", np.float32, self.state_dim),
             ("a", np.int32),
-            ("r", np.float32),
-            ("done", np.bool)
+            ("r", np.float32) #,
+            # ("done", np.bool)
         ])
         self.clear()
 
@@ -314,7 +409,7 @@ class ReplayDB:
         self.n_items = 0
         self.full = False
 
-    def store(self, s1, s2, a, r, done):
+    def store(self, s1, s2, a, r): #, done
         """Store new samples in the DB."""
 
         n = s1.shape[0]
@@ -322,17 +417,17 @@ class ReplayDB:
             self.full = True
             l = self.db_size - self.index
             if l > 0:
-                self.store(s1[:l], s2[:l], a[:l], r[:l], done[:l])
+                self.store(s1[:l], s2[:l], a[:l], r[:l])  #, done[:l]
             self.index = 0
             if l < n:
-                self.store(s1[l:], s2[l:], a[l:], r[l:], done[l:])
+                self.store(s1[l:], s2[l:], a[l:], r[l:])  #, done[l:]
         else:
             v = self.DB[self.index: self.index + n]
             v.s1 = s1
             v.s2 = s2
             v.a = a
             v.r = r
-            v.done = done
+            # v.done = done
             self.index += n
 
         self.n_items = min(self.n_items + n, self.db_size)
@@ -372,11 +467,11 @@ class ReplayDB:
         greenlet_learner.)"""
 
         for r in results:
-            done = np.zeros(r.states.shape[1], np.bool)
-            done[-1] = True
+            # done = np.zeros(r.states.shape[1], np.bool)
+            # done[-1] = True
             for i in range(r.states.shape[0]):
                 s2 = np.vstack([r.states[i, 1:], self._empty_state])
-                self.store(r.states[i], s2, r.actions[i], r.rewards[i], done)
+                self.store(r.states[i], s2, r.actions[i], r.rewards[i]) #, done
 
 
 class DataSet:
@@ -529,6 +624,7 @@ class QLearningNetwork(bp.Policy):
 
         self.log("Creating model...")
         self.g = tf.Graph()
+        self.ex_replay = ExperienceReplay(MAX_HISTORY_SIZE)
         with self.g.as_default():
             self.session = tf.Session() if session is None else session
             self.saver = None
@@ -664,7 +760,8 @@ class QLearningNetwork(bp.Policy):
         # legal_actions_hot_vector = np.zeros((7,), dtype=np.int32)
         # legal_actions_hot_vector[legal_actions] = 1
         # TODO save  to replayDB:{round, prev_state, prev_action, reward, new_state}
-
+        # Here we load one transition <s, a, r, s’> from memory
+        self.ex_replay.remember([prev_state, prev_action, reward, new_state], bool(reward))
         action = \
             self.session.run(self.y_argmax, feed_dict={self.x_input: new_state.reshape(-1, STATE_DIM),
                                                        self.y: temp_actions})[0]
