@@ -274,20 +274,20 @@ class QLearningNetwork(bp.Policy):
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
         # find legal actions:
 
-        legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
-        legal_actions = np.reshape(legal_actions, (legal_actions.size,))
-        legal_actions_hot_vector = np.zeros((7,), dtype=np.int32)
-        legal_actions_hot_vector[legal_actions] = 1
         self.batch_size = 64
-        self.ex_replay.store([prev_state, prev_action, reward, new_state], int(reward))
+        self.ex_replay.store([prev_state, prev_action, reward, new_state], int(reward)) # saving current state
         x_batch = self.ex_replay.get_batch(batch_size=self.batch_size)
         for i, v in enumerate(x_batch):
             prev_state, prev_action, reward, new_state = v[0]
+            legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
+            legal_actions = np.reshape(legal_actions, (legal_actions.size,))
+            legal_actions_hot_vector = np.zeros((7,), dtype=np.int32)
+            legal_actions_hot_vector[legal_actions] = 1
             if prev_state is None:
                 break
             self.log("Iteration: {}/{}, round:{}".format(i, self.batch_size, round))
             state_after_predicted_action = new_state
-            self.log("Actions={}".format(legal_actions_hot_vector), "DEBUG")
+            # self.log("Actions={}".format(legal_actions_hot_vector), "DEBUG")
             # [not sure necessary] ]in case of weird problems and draws (no legal actions):
             prev_action_predicted = 0
             reward_for_predicted_action = -1  # punishment for illegal cation
@@ -308,13 +308,10 @@ class QLearningNetwork(bp.Policy):
                 # Get new state and reward from environment
                 elif int(prev_action_predicted) not in legal_actions:
                     prev_action_predicted = np.random.choice(legal_actions)  # random action
-                self.log("Real action:{}, predicted action:{}".format(prev_action, prev_action_predicted), "DEBUG")
-                if int(
-                        prev_action_predicted) in legal_actions:  # if the action is ilegal learn the real game
-                    # action and
-                    #  reward
-                    state_after_predicted_action = make_move(prev_state, prev_action_predicted,
-                                                             self.id)  # get new state for the action
+                # self.log("Real action:{}, predicted action:{}".format(prev_action, prev_action_predicted), "DEBUG")
+                if int(prev_action_predicted) in legal_actions:  # if the action is ilegal learn the real game
+                    # get new state for the action
+                    state_after_predicted_action = make_move(prev_state, prev_action_predicted,self.id)
 
                     is_win = check_for_win(state_after_predicted_action, self.id, int(prev_action_predicted))
                     reward_for_predicted_action = int(is_win)
@@ -331,19 +328,19 @@ class QLearningNetwork(bp.Policy):
                                                                       self.y: predicted_actions_prob_vec})
                 # Obtain maxQ' and set our target value for chosen action.
                 max_action_prob_after_playing = np.max(actions_prob_vec_after_playing)
-                self.log("prob vector={}".format(actions_prob_vec_after_playing), "DEBUG")
-                self.log("predicted_actions_prob_vec before boost prob vector={}".format(predicted_actions_prob_vec),
-                         "DEBUG")
+                # self.log("prob vector={}".format(actions_prob_vec_after_playing), "DEBUG")
+                # self.log("predicted_actions_prob_vec before boost prob vector={}".format(predicted_actions_prob_vec),
+                #          "DEBUG")
                 predicted_actions_prob_vec[0, prev_action_predicted] = \
                     reward_for_predicted_action + GAMMA_FACTOR * max_action_prob_after_playing
                 if reward == -1:
                     predicted_actions_prob_vec[0, prev_action] = -1 + GAMMA_FACTOR * predicted_actions_prob_vec[
                         0, prev_action]
                     self.log("PUNISHED for action={}".format(prev_action))
-                self.log("Boosted prob vector={}".format(predicted_actions_prob_vec), "DEBUG")
-                self.log("is_win={},reward={},reward_for_predicted_action={}\n".format(is_win, reward,
-                                                                                       reward_for_predicted_action),
-                         "DEBUG")
+                # self.log("Boosted prob vector={}".format(predicted_actions_prob_vec), "DEBUG")
+                # self.log("is_win={},reward={},reward_for_predicted_action={}\n".format(is_win, reward,
+                #                                                                        reward_for_predicted_action),
+                #          "DEBUG")
                 # Trying Temporal_difference_learning
                 # https://en.wikipedia.org/wiki/Temporal_difference_learning
                 # predicted_actions_prob_vec[
