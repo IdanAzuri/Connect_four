@@ -24,17 +24,9 @@ FC4 = 32
 EMPTY_VAL = 0
 PLAYER1_ID = 1
 PLAYER2_ID = 2
-MAX_HISTORY_SIZE = 100
 ROWS = 6
 COLS = 7
 WIN_MASK = np.ones(4)
-ACTIONS = [0, 1, 2, 3, 4, 5, 6]
-
-
-# parameters
-
-
-# Consts
 
 
 # Helper functions
@@ -50,249 +42,13 @@ def bias_variable(shape):
     return tf.Variable(initial)
 
 
-class NeuralNetwork:
-
-    @staticmethod
-    def run_op_in_batches(session, op, batch_dict={}, batch_size=None,
-                          extra_dict={}):
-
-        """Return the result of op by running the network on small batches of
-        batch_dict."""
-
-        if batch_size is None:
-            return session.run(op, feed_dict={**batch_dict, **extra_dict})
-
-        # Probably the least readable form to get an arbitrary item from a dict
-        n = len(next(iter(batch_dict.values())))
-
-        s = []
-        for i in range(0, n, batch_size):
-            bd = {k: b[i: i + batch_size] for (k, b) in batch_dict.items()}
-            s.append(session.run(op, feed_dict={**bd, **extra_dict}))
-
-        if s[0] is not None:
-            if np.ndim(s[0]):
-                return np.concatenate(s)
-            else:
-                return np.asarray(s)
-
-    def __init__(self, input_dim, output_dim, hidden_layers, session=None,
-                 name_prefix="", input_=None):
-        """Create an ANN with fully connected hidden layers of width
-        hidden_layers."""
-
-        self.saver = None
-
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.name_prefix = name_prefix
-
-        self.weights = []
-        self.biases = []
-
-        self.session = tf.Session() if session is None else session
-        if input_ is None:
-            self.input = tf.placeholder(tf.float32,
-                                        shape=(None, self.input_dim),
-                                        name="{}input".format(self.name_prefix)
-                                        )
-        else:
-            self.input = input_
-        self.layers = [self.input]
-
-        for i, width in enumerate(hidden_layers):
-            a = self.affine("{}hidden{}".format(self.name_prefix, i),
-                            self.layers[-1], width)
-            self.layers.append(a)
-
-        self.output = self.affine("{}output".format(self.name_prefix),
-                                  self.layers[-1], self.output_dim, relu=False)
-        self.probabilities = tf.nn.softmax(self.output,
-                                           name="{}probabilities".format(self.name_prefix))
-        self.output_max = tf.reduce_max(self.output, axis=1)
-        self.output_argmax = tf.argmax(self.output, axis=1)
-
-    def vars(self):
-        """Iterate over all the variables of the network."""
-
-        for w in self.weights:
-            yield w
-        for b in self.biases:
-            yield b
-
-    def affine(self, name_scope, input_tensor, out_channels, relu=True,
-               residual=False):
-        """Create a fully-connected affaine layer."""
-
-        input_shape = input_tensor.get_shape().as_list()
-        input_channels = input_shape[-1]
-        with tf.variable_scope(name_scope):
-            W = tf.get_variable("weights",
-                                initializer=tf.truncated_normal(
-                                    [input_channels, out_channels],
-                                    stddev=1.0 / np.sqrt(float(input_channels))
-                                ))
-            b = tf.get_variable("biases",
-                                initializer=tf.zeros([out_channels]))
-
-            self.weights.append(W)
-            self.biases.append(b)
-
-            A = tf.matmul(input_tensor, W) + b
-
-            if relu:
-                R = tf.nn.relu(A)
-                if residual:
-                    return R + input_tensor
-                else:
-                    return R
-            else:
-                return A
-
-    def take(self, indices):
-        """Return an operation that takes values from network outputs.
-        e.g. NN.predict_max() == NN.take(NN.predict_argmax())
-        """
-
-        mask = tf.one_hot(indices=indices, depth=self.output_dim, dtype=tf.bool,
-                          on_value=True, off_value=False, axis=-1)
-        return tf.boolean_mask(self.output, mask)
-
-    def assign(self, other):
-        """Return a list of operations that copies other network into self."""
-
-        ops = []
-        for (vh, v) in zip(self.vars(), other.vars()):
-            ops.append(tf.assign(vh, v))
-        return ops
-
-    def reinit(self):
-        """Reset weights to initial random values."""
-
-        for w in self.weights:
-            self.session.run(w.initializer)
-        for b in self.biases:
-            self.session.run(b.initializer)
-
-    def save(self, save_path, step):
-        """Save the current graph."""
-
-        if self.saver is None:
-            with self.g.as_default():
-                self.saver = tf.train.Saver(max_to_keep=None)
-
-        p = Path(save_path)
-        p.mkdir(parents=True, exist_ok=True)
-
-        fname = str(p / "{:04d}".format(step) / "model.ckpt")
-        self.saver.save(self.session, fname)
-
-        return p / "{:04d}".format(step)
-
-    def load(self, path):
-        """Load weights or init variables if path==None."""
-
-        if self.saver is None:
-            self.saver = tf.train.Saver(max_to_keep=None)
-
-        if path is None:
-            self.session.run(tf.global_variables_initializer())
-            return 0
-        else:
-            p = Path(path)
-
-            files = p.glob("**/model.ckpt.meta")
-            newest = max(files, key=lambda p: p.stat().st_ctime)
-            fname = str(newest)[:-5]
-
-            self.saver.restore(self.session, fname)
-
-            return int(newest.parts[-2])
-
-    def predict_probabilities(self, inputs_feed, batch_size=None):
-        """Return softmax on NN outputs."""
-
-        feed_dict = {self.input: inputs_feed}
-        return self.run_op_in_batches(self.session, self.probabilities,
-                                      feed_dict, batch_size)
-
-    def predict_argmax(self, inputs_feed, batch_size=None):
-        """Return argmax on NN outputs."""
-
-        feed_dict = {self.input: inputs_feed}
-        return self.run_op_in_batches(self.session, self.output_argmax,
-                                      feed_dict, batch_size)
-
-    def predict_max(self, inputs_feed, batch_size=None):
-        """Return max on NN outputs."""
-
-        feed_dict = {self.input: inputs_feed}
-        return self.run_op_in_batches(self.session, self.output_max,
-                                      feed_dict, batch_size)
-
-    def predict_raw(self, inputs_feed, batch_size=None):
-        """Return NN outputs without transformation."""
-
-        feed_dict = {self.input: inputs_feed}
-        return self.run_op_in_batches(self.session, self.output,
-                                      feed_dict, batch_size)
-
-    def predict_random(self, inputs_feed, epsilon=0.01, batch_size=None):
-        """Return random element based on softmax on the NN outputs.
-        epsilon is a smoothing parameter."""
-
-        n = len(inputs_feed)
-        base = self.predict_probabilities(inputs_feed, batch_size) + epsilon
-        probs = base / base.sum(1, keepdims=True)
-        out = np.zeros(n, np.int32)
-
-        for i in range(n):
-            out[i] = np.random.choice(self.output_dim, 1, p=probs[i])
-
-        return out
-
-    def predict_exploration(self, inputs_feed, epsilon=0.1, batch_size=None):
-        """Return argmax with probability (1-epsilon), and random value with
-        probabilty epsilon."""
-
-        n = len(inputs_feed)
-        out = self.predict_argmax(inputs_feed, batch_size)
-        exploration = np.random.random(n) < epsilon
-        out[exploration] = np.random.choice(self.output_dim, exploration.sum())
-
-        return out
-
-    def train_in_batches(self, train_op, feed_dict, n_batches, batch_size,
-                         balanced=False):
-        """Train the network by randomly sub-sampling feed_dict."""
-
-        keys = tuple(feed_dict.keys())
-        if balanced:
-            ds = BalancedDataSet(*[feed_dict[k] for k in keys])
-        else:
-            ds = DataSet(*[feed_dict[k] for k in keys])
-
-        for i in range(n_batches):
-            batch = ds.next_batch(batch_size)
-            d = {k: b for (k, b) in zip(keys, batch)}
-            self.session.run(train_op, d)
-
-    def accuracy(self, accuracy_op, feed_dict, batch_size):
-        """Return the average value of an accuracy op by running the network
-        on small batches of feed_dict."""
-
-        return self.run_op_in_batches(self.session, accuracy_op,
-
-                                      feed_dict, batch_size).mean()
-
-
 class ExperienceReplay(object):
     """
     During gameplay all the experiences < s, a, r, s’ > are stored in a replay memory. 
     In training, batches of randomly drawn experiences are used to generate the input and target for training.
     """
 
-    def __init__(self, session, x, y, y_logic, max_memory=100, discount=GAMMA_FACTOR):
+    def __init__(self, session, x_placeholder, y_placeholder, y_logits, max_memory=100, discount=GAMMA_FACTOR):
         """
         Setup
         max_memory: the maximum number of experiences we want to store
@@ -305,22 +61,22 @@ class ExperienceReplay(object):
         [experience, game_over]
         ...]
         """
-        self.x_input_ = x
-        self.y_ = y
+        self.x_input_ = x_placeholder
+        self.y_ = y_placeholder
         self.session_ = session
-        self.y_logic_ = y_logic
-        self.max_memory = max_memory
-        self.memory = list()  # TODO make dictionary
+        self.y_logit_ = y_logits
+        self.max_memory = 1e7
+        self.memory = []
         self.discount = GAMMA_FACTOR
 
-    def remember(self, states, game_over):
+    def store(self, states, game_over):
         # Save a state to memory, game over = 1 otherwise 0
         self.memory.append([states, game_over])
         # We don't want to store infinite memories, so if we have too many, we just delete the oldest one
         if len(self.memory) > self.max_memory:
             del self.memory[0]
 
-    def get_batch(self, batch_size=10):
+    def get_batch_and_target(self, batch_size=10):
 
         # How many experiences do we have?
         len_memory = len(self.memory)
@@ -340,6 +96,7 @@ class ExperienceReplay(object):
         targets = np.zeros((inputs.shape[0], num_actions))
 
         # We draw states to learn from randomly
+        # TODO FIX SIZE BATCH_SIZE
         for i, idx in enumerate(np.random.randint(0, len_memory,
                                                   size=inputs.shape[0])):
             """
@@ -357,11 +114,10 @@ class ExperienceReplay(object):
             # add the state s to the input
             inputs[i:i + 1] = state_t
 
-
             # First we fill the target values with the predictions of the model.
             # They will not be affected by training (since the training loss for them is 0)
             # prev_action_predicted, predicted_actions_prob_vec
-            prev_action_predicted, targets[i] = self.session_.run(self.y_logic_, self.y_, feed_dic={
+            prev_action_predicted, targets[i] = self.session_.run(self.y_logit_, self.y_, feed_dic={
                 self.x_input_: state_t.reshape(
                     -1, STATE_DIM), self.y_: np.ones((1, 7))})[0]
 
@@ -370,7 +126,7 @@ class ExperienceReplay(object):
             Otherwise the target value is r + gamma * max Q(s’,a’)
             """
             #  Here Q_sa is max_a'Q(s', a')
-            Q_sa = np.max(self.session_.predict(state_tp1)[0])
+            Q_sa = np.max(prev_action_predicted)
 
             # if the game ended, the reward is the final reward
             if game_over:  # if game_over is True
@@ -380,159 +136,24 @@ class ExperienceReplay(object):
                 targets[i, action_t] = reward_t + GAMMA_FACTOR * Q_sa
         return inputs, targets
 
+    def get_batch(self, batch_size=64):
+        '''
+        Here we load one transition <s, a, r, s’> from memory
 
-class ReplayDB:
-    """Holds previous games and allows sampling random combinations of
-        (state, action, new state, reward)
-    """
+        :param batch_size:
 
-    def __init__(self, state_dim, db_size):
-        """Create new DB of size db_size."""
-
-        self.state_dim = state_dim
-        self.db_size = db_size
-        self._empty_state = np.zeros((1, self.state_dim))
-
-        self.DB = np.rec.recarray(self.db_size, dtype=[
-            ("s1", np.float32, self.state_dim),
-            ("s2", np.float32, self.state_dim),
-            ("a", np.int32),
-            ("r", np.float32) #,
-            # ("done", np.bool)
-        ])
-        self.clear()
-
-    def clear(self):
-        """Remove all entries from the DB."""
-
-        self.index = 0
-        self.n_items = 0
-        self.full = False
-
-    def store(self, s1, s2, a, r): #, done
-        """Store new samples in the DB."""
-
-        n = s1.shape[0]
-        if self.index + n > self.db_size:
-            self.full = True
-            l = self.db_size - self.index
-            if l > 0:
-                self.store(s1[:l], s2[:l], a[:l], r[:l])  #, done[:l]
-            self.index = 0
-            if l < n:
-                self.store(s1[l:], s2[l:], a[l:], r[l:])  #, done[l:]
-        else:
-            v = self.DB[self.index: self.index + n]
-            v.s1 = s1
-            v.s2 = s2
-            v.a = a
-            v.r = r
-            # v.done = done
-            self.index += n
-
-        self.n_items = min(self.n_items + n, self.db_size)
-
-    def sample(self, sample_size=None):
-        """Get a random sample from the DB."""
-
-        if self.full:
-            db = self.DB
-        else:
-            db = self.DB[:self.index]
-
-        if (sample_size is None) or (sample_size > self.n_items):
-            return db
-        else:
-            return np.rec.array(np.random.choice(db, sample_size, False))
-
-    def iter_samples(self, sample_size, n_samples):
-        """Iterate over random samples from the DB."""
-
-        if sample_size == 0:
-            sample_size = self.n_items
-
-        ind = self.n_items
-        for i in range(n_samples):
-            end = ind + sample_size
-            if end > self.n_items:
-                ind = 0
-                end = sample_size
-                p = np.random.permutation(self.n_items)
-                db = np.rec.array(self.DB[p])
-            yield db[ind: end]
-            ind = end
-
-    def store_episodes_results(self, results):
-        """Store all results from episodes (in the format of
-        greenlet_learner.)"""
-
-        for r in results:
-            # done = np.zeros(r.states.shape[1], np.bool)
-            # done[-1] = True
-            for i in range(r.states.shape[0]):
-                s2 = np.vstack([r.states[i, 1:], self._empty_state])
-                self.store(r.states[i], s2, r.actions[i], r.rewards[i]) #, done
-
-
-class DataSet:
-    """A class for datasets (labeled data). Supports random batches."""
-
-    def __init__(self, *args):
-        """Create a new dataset."""
-
-        self.X = [a.copy() for a in args]
-        self.n = self.X[0].shape[0]
-        self.ind = 0
-        self.p = np.random.permutation(self.n)
-
-    def next_batch(self, batch_size):
-        """Get the next batch of size batch_size."""
-
-        if batch_size > self.n:
-            batch_size = self.n
-
-        if self.ind + batch_size > self.n:
-            # we reached end of epoch, so we shuffle the data
-            self.p = np.random.permutation(self.n)
-            self.ind = 0
-
-        batch = self.p[self.ind: self.ind + batch_size]
-        self.ind += batch_size
-
-        return tuple(a[batch] for a in self.X)
-
-
-class BalancedDataSet:
-    """A class for datasets (labeled data). Supports balanced random batches."""
-
-    def __init__(self, X, l):
-        """Create a new dataset."""
-
-        labels = set(l)
-        self.n_groups = len(labels)
-        self.groups = []
-
-        for label in labels:
-            X_i = X[l == label]
-            ds_i = DataSet(X_i, np.repeat(label, X_i.shape[0]))
-            self.groups.append(ds_i)
-
-        self.n = min(ds.n for ds in self.groups) * self.n_groups
-
-    def next_batch(self, batch_size):
-        """Get the next batch of size batch_size."""
-
-        group_size = batch_size // self.n_groups
-
-        X = []
-        l = []
-
-        for group in self.groups:
-            X_i, l_i = group.next_batch(group_size)
-            X.append(X_i)
-            l.append(l_i)
-
-        return np.vstack(X), np.hstack(l)
+        :return: a permutation of:
+        state_t: prev state s
+        action_t: action taken a
+        reward_t: reward earned r
+        state_tp1: the state that followed s’
+        return state_t, action_t, reward_t, state_tp1
+        '''
+        memory_len = len(self.memory)
+        # indices_permutation = np.random.permutation(memory_len)[:min(batch_size,memory_len)]
+        shuffle_indices = np.arange(memory_len)
+        np.random.shuffle(shuffle_indices) # get shuffled batch
+        return self.memory[shuffle_indices]
 
 
 def check_for_win(board, player_id, col):
@@ -624,7 +245,6 @@ class QLearningNetwork(bp.Policy):
 
         self.log("Creating model...")
         self.g = tf.Graph()
-        self.ex_replay = ExperienceReplay(MAX_HISTORY_SIZE)
         with self.g.as_default():
             self.session = tf.Session() if session is None else session
             self.saver = None
@@ -644,8 +264,12 @@ class QLearningNetwork(bp.Policy):
             # create lists to contain total rewards and steps per episode
             self.steps_list = []
             self.rewards_list = []
-            self.load(path=None)
-            # self.session.run(tf.global_variables_initializer())
+            self.load()
+            self.memory_args_dict = {'session': self.session, 'x_placeholder': self.x_input, 'y_placeholder': self.y,
+                                     'y_logits': self.y_logitis}
+
+        self.ex_replay = ExperienceReplay(*self.memory_args_dict)
+        # self.session.run(tf.global_variables_initializer())
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
         # find legal actions:
@@ -654,9 +278,8 @@ class QLearningNetwork(bp.Policy):
         legal_actions = np.reshape(legal_actions, (legal_actions.size,))
         legal_actions_hot_vector = np.zeros((7,), dtype=np.int32)
         legal_actions_hot_vector[legal_actions] = 1
-        if len(legal_actions) == 0:  # maybe to learn a draw?
-            return
 
+        x_batch = self.ex_replay.get_batch()
         state_after_predicted_action = new_state
         self.log("Actions={}".format(legal_actions_hot_vector), "DEBUG")
         # [not sure necessary] ]in case of weird problems and draws (no legal actions):
@@ -720,7 +343,7 @@ class QLearningNetwork(bp.Policy):
             self.session.run([self.trainer, self.loss],
                              feed_dict={self.x_input: new_state.reshape(-1, INPUT_SIZE),
                                         self.y: predicted_actions_prob_vec})
-            # Learnig from real game parameters TODO combine it to a dictionary to feed the model once
+            # TODO Learnig from real game parameters, combine it to a dictionary to feed the model once
             # Learning wins
             # if reward == 1:
             #     real_prob_vector =np.zeros((1,7))
@@ -730,7 +353,6 @@ class QLearningNetwork(bp.Policy):
             #                                 self.y: real_prob_vector})
             all_rewards += reward_for_predicted_action
             new_state = state_after_predicted_action
-            # TODO ADD LOOP TO LEARN THE NEW STATE WHILE THE GAME ISN'T OVER
 
             # self.steps_list.append(j)
             self.rewards_list.append(all_rewards)
@@ -759,9 +381,8 @@ class QLearningNetwork(bp.Policy):
         legal_actions = np.reshape(legal_actions, (legal_actions.size,))
         # legal_actions_hot_vector = np.zeros((7,), dtype=np.int32)
         # legal_actions_hot_vector[legal_actions] = 1
-        # TODO save  to replayDB:{round, prev_state, prev_action, reward, new_state}
-        # Here we load one transition <s, a, r, s’> from memory
-        self.ex_replay.remember([prev_state, prev_action, reward, new_state], bool(reward))
+        self.ex_replay.store([prev_state, prev_action, reward, new_state], bool(reward))
+        # TODO maybe to change y argument (tmp_actions)
         action = \
             self.session.run(self.y_argmax, feed_dict={self.x_input: new_state.reshape(-1, STATE_DIM),
                                                        self.y: temp_actions})[0]
@@ -771,9 +392,9 @@ class QLearningNetwork(bp.Policy):
         else:
             return np.random.choice(legal_actions)
 
-    def load(self, path="/tmp/model_connect_4/"):
+    def load(self, path=None):
         """Load weights or init variables if path==None."""
-
+        # path="/tmp/model_connect_4/"
         if self.saver is None:
             self.saver = tf.train.Saver(max_to_keep=None)
 
