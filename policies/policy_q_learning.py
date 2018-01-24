@@ -47,6 +47,12 @@ class ExperienceReplay(object):
             del self.memory[:100]
 
     def inverse_last_move(self, states, game_over):
+        """
+        
+        :param states: 
+        :param game_over: 
+        :return: 
+        """
         s1, action, reward, s2 = states
         flip_s1 = s1*2 % 3
         flip_s2 = s2*2 % 3
