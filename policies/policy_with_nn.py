@@ -247,7 +247,7 @@ class QLearningNetwork(bp.Policy):
 
     def init_run(self, save_path=None, l_rate=LEANING_RATE, session=None):
 
-        self.log("Creating model...layers={}|{}|{}|{},batch={}lr={}".format(FC1, FC2, FC3, FC4, BATCH_SIZE, l_rate))
+        # self.log("Creating model...layers={}|{}|{}|{},batch={}lr={}".format(FC1, FC2, FC3, FC4, BATCH_SIZE, l_rate))
         self.learning_rate = LEANING_RATE
         self.wins = 0
 
@@ -263,6 +263,7 @@ class QLearningNetwork(bp.Policy):
             # y is the next Q
             self.y = tf.placeholder(tf.float32, [None, NUM_ACTIONS], name='predicted')
             # predicted Q
+
             self.y_logitis, self.y_argmax = deep_nn(self.x_input)
 
             self.loss = tf.reduce_sum(tf.square(self.y - self.y_logitis))

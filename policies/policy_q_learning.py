@@ -46,9 +46,20 @@ class ExperienceReplay(object):
         if len(self.memory) > self.max_memory:
             del self.memory[:100]
 
+    def inverse_last_move(self, states, game_over):
+        s1, action, reward, s2 = states
+        flip_s1 = s1*2 % 3
+        flip_s2 = s2*2 % 3
+        reward *= -1
+        game_over *= -1
+        return [flip_s1, action, reward, flip_s2], game_over
+
     def store_last_move(self, states, game_over):
         # Save a state to memory, game over = 1 otherwise 0
         self.memory_last_move.append([states, game_over])
+        # will learn also the inverse last move
+        flip_states, flip_game_over = self.inverse_last_move(states, game_over)
+        self.memory_last_move.append([flip_states, flip_game_over])
         # We don't want to store infinite memories, so if we have too many, we just delete the oldest one
         if len(self.memory_last_move) > self.max_memory:
             del self.memory_last_move[:100]
@@ -181,7 +192,6 @@ class QLearningAgent(bp.Policy):
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
         self.batch_size = BATCH_SIZE
         self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state], int(reward))
-
         x_batces = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
         for batch in x_batces:
             for i, sample in enumerate(batch):
