@@ -1,9 +1,12 @@
 import os
-import sys
 from pathlib import Path
 
 import numpy as np
 import tensorflow as tf
+
+LEANING_RATE = 1e-2
+
+BATCH_SIZE = 16
 
 np.random.seed(1231)
 from policies import base_policy as bp
@@ -15,8 +18,8 @@ NUM_ACTIONS = 7
 STATE_DIM = 7 * 6  # board size
 
 INPUT_SIZE = STATE_DIM
-FC1 = 256
-FC2 = 128
+FC1 = 128
+FC2 = 64
 FC3 = 64
 FC4 = 32
 EMPTY_VAL = 0
@@ -47,8 +50,7 @@ class ExperienceReplay(object):
     """
 
     def __init__(self, session, x_placeholder, y_placeholder, y_logits, max_memory=2e7, discount=GAMMA_FACTOR):
-        """
-        Setup
+        '''
         max_memory: the maximum number of experiences we want to store
         memory: a list of experiences
         discount: the discount factor for future experience
@@ -58,7 +60,13 @@ class ExperienceReplay(object):
         [experience, game_over]
         [experience, game_over]
         ...]
-        """
+        :param session: curernt session for prediction
+        :param x_placeholder: current state placeholder
+        :param y_placeholder: actions probability placeholder
+        :param y_logits: predicted actions probability
+        :param max_memory:
+        :param discount: gamma factor
+        '''
         self.x_input_ = x_placeholder
         self.y_ = y_placeholder
         self.session_ = session
@@ -238,9 +246,12 @@ class QLearningNetwork(bp.Policy):
         policy_args['depth'] = int(policy_args['depth']) if 'depth' in policy_args else 1
         return policy_args
 
-    def init_run(self, save_path=None, l_rate=1e-2, session=None):
+    def init_run(self, save_path=None, l_rate=LEANING_RATE, session=None):
 
-        self.log("Creating model...lr={}".format(l_rate))
+        self.log("Creating model...layers={}|{}|{}|{},batch={}lr={}".format(FC1, FC2, FC3, FC4, BATCH_SIZE, l_rate))
+        self.learning_rate = LEANING_RATE
+        self.wins = 0
+
         self.g = tf.Graph()
         with self.g.as_default():
             self.session = tf.Session() if session is None else session
@@ -265,130 +276,114 @@ class QLearningNetwork(bp.Policy):
             self.load()
             self.memory_args_dict = {'session': self.session, 'x_placeholder': self.x_input, 'y_placeholder': self.y,
                                      'y_logits': self.y_logitis}
-
-        self.ex_replay = ExperienceReplay(*self.memory_args_dict)
-        self.ex_replay_last_move = ExperienceReplay(*self.memory_args_dict)
-
-    # self.session.run(tf.global_variables_initializer())
+            self.ex_replay = ExperienceReplay(*self.memory_args_dict)
+            # self.ex_replay_last_move = ExperienceReplay(*self.memory_args_dict)
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
         # find legal actions:
 
-        self.batch_size = 64
-        # self.ex_replay.store([prev_state, prev_action, reward, new_state], int(reward)) # saving current state
+        self.batch_size = BATCH_SIZE
         self.ex_replay.store([prev_state, prev_action, reward, new_state], int(reward))
 
         x_batch = self.ex_replay.get_batch(batch_size=self.batch_size)
         for i, v in enumerate(x_batch):
-            self.log("Iteration: {}/{}, round:{}, memory size={}".format(i, self.batch_size, round,
-                                                                         self.ex_replay.memory_len))
+            if round % 30 and i % 11 == 0:
+                self.log("Iteration: {}/{}, round:{}, memory size={}".format(i, self.batch_size, round, self.ex_replay.memory_len))
             prev_state, prev_action, reward, new_state = v[0]
-            game_over = bool(reward)
+
+            # j = np.random.randint(0,3,1) # num of inner loops TODO solve performance issue
             j = 0
-            while j < 10 and not game_over:
+            while j < 2:
                 j += 1
-                self.log("Inside loop {}".format(j))
-                # legal_actions_hot_vector = np.zeros((7,), dtype=np.int32)
-                # legal_actions_hot_vector[legal_actions] = 1
+                # self.log("Inside loop {}".format(j),"DEBUG")
                 if prev_state is None:
                     break
                 legal_actions = np.array(np.where(prev_state[0, :] == EMPTY_VAL))
                 legal_actions = np.reshape(legal_actions, (legal_actions.size,))
-                self.log("Actions={}".format(legal_actions), "DEBUG")
-                # [not sure necessary] ]in case of weird problems and draws (no legal actions):
+                # self.log("Actions={}".format(legal_actions), "DEBUG")
                 action_prediction = 0
                 reward_for_predicted_action = -1  # punishment for illegal cation
-                predicted_actions_prob_vec = np.random.randn(1, 7)
-                all_rewards = 0
-                # The Q-Network
-                # Choose an action by greedily (with e chance of random action) from the Q-network
-                try:
-                    action_prediction, predicted_actions_prob_vec = \
-                        self.session.run([self.y_argmax, self.y_logitis], feed_dict={
-                            self.x_input: prev_state.reshape(
-                                -1, STATE_DIM),
-                            self.y: np.ones((1, 7))})
-                    if np.random.rand(1) < self.epsilon:  # exploration
-                        action_prediction = np.random.choice(legal_actions)  # random action
-                    # Get new state and reward from environment
-                    elif int(action_prediction) not in legal_actions:
+                # try:
+                action_prediction, predicted_actions_prob_vec = self.session.run([self.y_argmax, self.y_logitis],
+                                                                                 feed_dict={self.x_input: prev_state.reshape(-1, STATE_DIM),
+                                                                                            self.y: np.ones((1, 7))})
+                if np.random.rand(1) < self.epsilon:  # exploration
+                    action_prediction = np.random.choice(legal_actions)
+                # Get new state and reward from environment
+                elif int(action_prediction) not in legal_actions:
+                    reward_for_predicted_action = -1
+                    action_prediction = np.random.choice(legal_actions)  # random action
+                # self.log("Real action:{}, predicted action:{}".format(prev_action, action_prediction), "DEBUG")
+                if int(action_prediction) in legal_actions:  # if the action is ilegal learn the real game
+                    # get new state for the action
+                    state_after_predicted_action = make_move(prev_state, action_prediction, self.id)
+
+                    is_win = check_for_win(state_after_predicted_action, self.id, int(action_prediction))
+                    reward_for_predicted_action = int(is_win)
+                    # if is_win:
+                    #     self.wins += 1
+
+                    if reward_for_predicted_action < reward:  # penalized if you could win but you didn't win
                         reward_for_predicted_action = -1
-                        action_prediction = np.random.choice(legal_actions)  # random action
-                    self.log("Real action:{}, predicted action:{}".format(prev_action, action_prediction), "DEBUG")
-                    if int(action_prediction) in legal_actions:  # if the action is ilegal learn the real game
-                        # get new state for the action
-                        state_after_predicted_action = make_move(prev_state, action_prediction, self.id)
 
-                        is_win = check_for_win(state_after_predicted_action, self.id, int(action_prediction))
-                        reward_for_predicted_action = int(is_win)
-                        if is_win:
-                            game_over = True
-                            # Reduce chance of random action as we train the model.
-                            self.epsilon = 1. / ((self.ex_replay.memory_len + 50) + 10)
-                        if reward_for_predicted_action < reward:  # penalized if you could win but you didn't win
-                            reward_for_predicted_action = -1
-
-                    # Obtain the Q' values by feeding the new state through our network
-                    actions_prob_vec_after_playing = \
-                        self.session.run(self.y_logitis, feed_dict={self.x_input: state_after_predicted_action.reshape(-1, INPUT_SIZE),
-                                                                    self.y: predicted_actions_prob_vec})
-                    # Obtain maxQ' and set our target value for chosen action.
-                    max_action_prob_after_playing = np.max(actions_prob_vec_after_playing)
-                    # self.log("prob vector={}".format(actions_prob_vec_after_playing), "DEBUG")
-                    # self.log("predicted_actions_prob_vec before boost prob vector={}".format(predicted_actions_prob_vec),
-                    #          "DEBUG")
-                    predicted_actions_prob_vec[0, action_prediction] = \
-                        reward_for_predicted_action + GAMMA_FACTOR * max_action_prob_after_playing
-                    if reward == -1:
-                        predicted_actions_prob_vec[0, prev_action] = -1 + GAMMA_FACTOR * predicted_actions_prob_vec[
-                            0, prev_action]
-                        self.log("PUNISHED for action={}".format(prev_action))
-
-                    self.session.run([self.trainer, self.loss], #TODO maybe to do that only if we win otherwise do somethingelse
-                                     feed_dict={self.x_input: new_state.reshape(-1, INPUT_SIZE),
+                # Obtain the Q' values by feeding the new state through our network
+                actions_prob_vec_after_playing = \
+                    self.session.run(self.y_logitis,
+                                     feed_dict={self.x_input: state_after_predicted_action.reshape(-1, INPUT_SIZE),
                                                 self.y: predicted_actions_prob_vec})
+                # Obtain maxQ' and set our target value for chosen action.
+                max_action_prob_after_playing = np.max(actions_prob_vec_after_playing)
+                # self.log("prob vector={}".format(actions_prob_vec_after_playing), "DEBUG")
+                # self.log("predicted_actions_prob_vec before boost prob vector={}".format(predicted_actions_prob_vec),
+                #          "DEBUG")
+                predicted_actions_prob_vec[0, action_prediction] = \
+                    reward_for_predicted_action + GAMMA_FACTOR * max_action_prob_after_playing
+                if reward == -1:
+                    predicted_actions_prob_vec[0, prev_action] = -0.5 + GAMMA_FACTOR * predicted_actions_prob_vec[
+                        0, prev_action]
+                    self.log("PUNISHED for action={}".format(prev_action))
 
-                    all_rewards += reward_for_predicted_action
-                    prev_state = new_state
-                    prev_action = action_prediction
-                    reward = reward_for_predicted_action
-                    new_state = state_after_predicted_action
+                self.session.run([self.trainer, self.loss],
+                                 # TODO maybe to do that only if we win otherwise do somethingelse
+                                 feed_dict={self.x_input: new_state.reshape(-1, INPUT_SIZE),
+                                            self.y: predicted_actions_prob_vec})
 
-                    # self.steps_list.append(j)
-                    self.rewards_list.append(all_rewards)
-                    print(" SCORE: " + str(sum(self.rewards_list)))
-                except ValueError as e:
-                    self.log("ValueError error({0})".format(e), "ERROR")
-                    print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
-                    print("prev_state:{}, action_prediction:{}".format(prev_state, action_prediction))
-                except IOError as e:
-                    self.log("I/O error({0}): {1}".format(e.errno, e.strerror), "ERROR")
-                    print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
-                except IndexError as e:
-                    self.log("IndexError,prev_state:{}, action_prediction:{}, error({0})".format(prev_state,
-                                                                                                 action_prediction,
-                                                                                                 e), "ERROR")
-                    print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
-                # except:
-                #     self.log("Unexpected error:{}".format(sys.exc_info()[0]), "ERROR")
-                #     raise
+                # update inside loop
+                prev_state = new_state
+                prev_action = action_prediction
+                reward = reward_for_predicted_action
+                new_state = state_after_predicted_action
+            # Reduce chance of random action as we train the model.
+
+            if (round + 1) % 5000:
+                self.epsilon = max(self.epsilon / 2, 1e-4)
+                # self.save_model()
+
+                # except ValueError as e:
+                #     self.log("ValueError error({0})".format(e), "ERROR")
+                #     print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
+                #     print("prev_state:{}, action_prediction:{}".format(prev_state, action_prediction))
+                # except IOError as e:
+                #     self.log("I/O error({0}): {1}".format(e.errno, e.strerror), "ERROR")
+                #     print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
+                # except IndexError as e:
+                #     self.log("IndexError,prev_state:{}, action_prediction:{}, error({0})".format(prev_state,
+                #                                                                                  action_prediction,
+                #                                                                                  e), "ERROR")
+                #     print('Error on line {}'.format(sys.exc_info()[-1].tb_lineno), type(e).__name__, e)
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         temp_actions = np.random.randn(1, 7)
         legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
         legal_actions = np.reshape(legal_actions, (legal_actions.size,))
-        # legal_actions_hot_vector = np.zeros((7,), dtype=np.int32)
-        # legal_actions_hot_vector[legal_actions] = 1
+
         self.ex_replay.store([prev_state, prev_action, reward, new_state], int(reward))
         # TODO maybe to change y argument (tmp_actions)
-        action = \
-            self.session.run(self.y_argmax, feed_dict={self.x_input: new_state.reshape(-1, STATE_DIM),
-                                                       self.y: temp_actions})[0]
-
-        if action in legal_actions:  # and np.random.random() > self.epsilon:
-            return action
-        else:
+        action = self.session.run(self.y_argmax, feed_dict={self.x_input: new_state.reshape(-1, STATE_DIM), self.y: temp_actions})[0]
+        if np.random.random() > self.epsilon or action not in legal_actions:
             return np.random.choice(legal_actions)
+        else:
+            return action
 
     def load(self, path=None):
         """Load weights or init variables if path==None."""
@@ -412,7 +407,6 @@ class QLearningNetwork(bp.Policy):
 
     def save_model(self, save_path="/tmp/model_connect_4/"):
         """Save the current graph."""
-
         if self.saver is None:
             with self.g.as_default():
                 self.saver = tf.train.Saver(max_to_keep=None)
@@ -420,7 +414,8 @@ class QLearningNetwork(bp.Policy):
         p = Path(save_path)
         p.mkdir(parents=True, exist_ok=True)
 
-        fname = str(p / "{:04d_player_{}}".format(sum(self.rewards_list, self.id)) / "model.ckpt")
+        fname = str(p / "moves_{}_player_{}_layers={}_{}_{}_{}_batch={}lr_{}".format(self.ex_replay.memory_len, self.id, FC1, FC2, FC3, FC4,
+                                                                                     BATCH_SIZE, self.learning_rate) / "model.ckpt")
         self.saver.save(self.session, fname)
         self.log("Model saved in file: %s" % save_path)
 
