@@ -8,14 +8,14 @@ np.random.seed(1231)
 from policies import base_policy as bp
 
 LEANING_RATE = 1e-2
-BATCH_SIZE = 16
+BATCH_SIZE = 8
 GAMMA_FACTOR = 0.99
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6  # board size
 INPUT_SIZE = STATE_DIM
 FC1 = 64
-FC2 = 64
-FC3 = 64
+FC2 = 32
+FC3 = 32
 # FC4 = 32
 EMPTY_VAL = 0
 PLAYER1_ID = 1
@@ -39,9 +39,9 @@ class ExperienceReplay(object):
         self.max_memory_last_move = max_memory
         self.memory_len = 0
 
-    def store(self, states, game_over):
+    def store(self, states):
         # Save a state to memory, game over = 1 otherwise 0
-        self.memory.append([states, game_over])
+        self.memory.append([states])
         # We don't want to store infinite memories, so if we have too many, we just delete the oldest one
         if len(self.memory) > self.max_memory:
             del self.memory[:100]
@@ -61,11 +61,13 @@ class ExperienceReplay(object):
         return [flip_s1, action, reward, flip_s2], game_over
 
     def store_last_move(self, states, game_over):
+    def store_last_move(self, states):
         # Save a state to memory, game over = 1 otherwise 0
         self.memory_last_move.append([states, game_over])
         # will learn also the inverse last move
         flip_states, flip_game_over = self.inverse_last_move(states, game_over)
         self.memory_last_move.append([flip_states, flip_game_over])
+        self.memory_last_move.append([states])
         # We don't want to store infinite memories, so if we have too many, we just delete the oldest one
         if len(self.memory_last_move) > self.max_memory:
             del self.memory_last_move[:100]
@@ -84,9 +86,25 @@ class ExperienceReplay(object):
         return state_t, action_t, reward_t, state_tp1
         '''
         self.memory_len = len(self.memory)
-        shuffle_indices = np.arange(min(self.memory_len, batch_size))
-        np.random.shuffle(shuffle_indices)  # get shuffled batch
-        return np.asarray(self.memory)[shuffle_indices]
+        shuffle_indices = np.random.permutation(min(self.memory_len, batch_size, int(batch_size)))
+        yield np.asarray(self.memory)[shuffle_indices]
+
+    def get_last_move_batch(self, batch_size=32):
+        '''
+        Here we load one transition <s, a, r, s’> from memory
+
+        :param batch_size:
+
+        :return: a permutation of:
+        state_t: prev state s
+        action_t: action taken a
+        reward_t: reward earned r
+        state_tp1: the state that followed s’
+        return state_t, action_t, reward_t, state_tp1
+        '''
+        last_move_len = len(self.memory_last_move)
+        last_move_shuffle_indices = np.random.permutation(min(last_move_len, int(batch_size)))
+        yield np.asarray(self.memory_last_move)[last_move_shuffle_indices]
 
     def get_balanced_batch(self, batch_size=32):
         '''
@@ -96,17 +114,20 @@ class ExperienceReplay(object):
         '''
         batch_size /= 2  # divding batch size equally
         batch_samples = []
-        # sampling batch/2 last move states
         last_move_len = len(self.memory_last_move)
-        last_move_shuffle_indices = np.random.permutation(min(last_move_len, int(batch_size)))
-        batch_samples.append(np.asarray(self.memory_last_move)[last_move_shuffle_indices])
-
-        # sampling batch/2 regular game
         self.memory_len = len(self.memory)
+        # sampling batch/2 regular game
         shuffle_indices = np.random.permutation(min(int(batch_size), self.memory_len))
         np.random.shuffle(shuffle_indices)  # get shuffled batch
         batch_samples.append(np.asarray(self.memory)[shuffle_indices])
+        # more batched of last state
+        for i in range(2):
+            # sampling batch/2 last move states
+            last_move_shuffle_indices = np.random.permutation(min(last_move_len, int(batch_size)))
+            batch_samples.append(np.asarray(self.memory_last_move)[last_move_shuffle_indices])
+
         return np.asarray(batch_samples)
+
 
 
 # Helper functions
@@ -180,8 +201,7 @@ class QLearningAgent(bp.Policy):
             self.train_op = self.optimizer.minimize(self.loss)
 
             self.load(None)
-            # self.memory_args_dict = {'session': self.session, 'x_placeholder': self.input, 'y_placeholder': self.y,
-            #                          'y_logits': self.out}
+
             self.ex_replay = ExperienceReplay()  # ExperienceReplay(*self.memory_args_dict)
 
     def cast_string_args(self, policy_args):
@@ -197,37 +217,45 @@ class QLearningAgent(bp.Policy):
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
         self.batch_size = BATCH_SIZE
-        self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state], int(reward))
-        x_batces = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
-        for batch in x_batces:
-            for i, sample in enumerate(batch):
-                s1, action, reward, s2 = sample[0]
-                if s1 is None:
-                    break
-                v = self.predict_max(s2, self.batch_size)
-                legal_actions = np.array(np.where(s1[0, :] == EMPTY_VAL))
-                legal_actions = np.reshape(legal_actions, (legal_actions.size,))
-                if v not in legal_actions:
-                    q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
-                else:
-                    q = reward + (GAMMA_FACTOR * v)
-                feed_dict = {
-                    self.input: s1.reshape(-1, STATE_DIM),
-                    self.actions: action.reshape(-1, ),
-                    self.q_estimation: q.reshape(-1, )
-                }
-                # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
-                self.session.run(self.train_op, feed_dict=feed_dict)
+        self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
+        self.ex_replay.store([prev_state, prev_action, reward, new_state])
 
-                if round % 30 and i % 11 == 0:
-                    self.log("Iteration: {}/{}, round:{}, memory size={}".format(i, self.batch_size, round, self.ex_replay.memory_len))
+        x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
+        # x_batces_last_move = self.ex_replay.get_last_move_batch(batch_size=self.batch_size)
+        for j, batch in enumerate(x_batces_generator):
+            batch = np.reshape(batch, (-1,4))
+            s1_batch = np.asarray([x[0] for x in batch if x[0] is not None])
+            action_batch = np.asarray([x[1] for x in batch if x[0] is not None])
+            reward_batch = np.asarray([x[2] for x in batch if x[0] is not None])
+            s2_batch = np.asarray([x[3] for x in batch if x[0] is not None])
+            # s1, action, reward, s2 = sample
+
+            v = self.predict_max(s2_batch, self.batch_size)
+            legal_actions = np.array(np.where(s1_batch[0, :] == EMPTY_VAL))
+            legal_actions = np.reshape(legal_actions, (legal_actions.size,))
+
+            if v not in legal_actions:
+                q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
+            else:
+                q = reward + (GAMMA_FACTOR * v)
+            feed_dict = {
+                self.input: s1_batch.reshape(-1, STATE_DIM),
+                self.actions: action_batch.reshape(-1, ),
+                self.q_estimation: q.reshape(-1, )
+            }
+            self.log("rewards={},q={},v={},actions={}".format( reward_batch,q,v,action_batch))
+
+            # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
+            self.session.run(self.train_op, feed_dict=feed_dict)
+
+            # if round % 30 ==0 and i % 11 == 0:
+            self.log("Iteration: {}/{}, round:{}, memory size={}".format(j, self.batch_size, round, self.ex_replay.memory_len))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
         legal_actions = np.reshape(legal_actions, (legal_actions.size,))
 
-        self.ex_replay.store([prev_state, prev_action, reward, new_state], int(reward))
-        # TODO maybe to change y argument (tmp_actions)
+        self.ex_replay.store([prev_state, prev_action, reward, new_state])
         action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, STATE_DIM)})[0]
         if np.random.random() < self.epsilon:
             return np.random.choice(legal_actions)
