@@ -48,8 +48,8 @@ class ExperienceReplay(object):
 
     def inverse_last_move(self, states):
         s1, action, reward, s2 = states
-        flip_s1 = s1*2 % 3
-        flip_s2 = s2*2 % 3
+        flip_s1 = s1 * 2 % 3
+        flip_s2 = s2 * 2 % 3
         reward *= -1
         return [flip_s1, action, reward, flip_s2]
 
@@ -120,7 +120,6 @@ class ExperienceReplay(object):
         return np.asarray(batch_samples)
 
 
-
 # Helper functions
 def weight_variable(shape, name):
     """weight_variable generates a weight variable of a given shape."""
@@ -147,14 +146,13 @@ def deep_nn(X_input):
     B_LAST_LAYER = bias_variable([NUM_ACTIONS])
 
     # The model
-    with tf.name_scope('reshape'):
-        X_input = tf.reshape(X_input, [-1, INPUT_SIZE])
-        Y1 = tf.nn.leaky_relu(tf.matmul(X_input, W1) + B1)
-        Y2 = tf.nn.leaky_relu(tf.matmul(Y1, W2) + B2)
-        Y3 = tf.nn.leaky_relu(tf.matmul(Y2, W3) + B3)
-        Y4 = tf.nn.tanh(tf.matmul(Y3, W3) + B3)
-        Y_logitis = tf.matmul(Y4, W_LAST_LAYER) + B_LAST_LAYER
-        predict = tf.argmax(Y_logitis, 1)
+    X_input = tf.reshape(X_input, [-1, INPUT_SIZE])
+    Y1 = tf.nn.leaky_relu(tf.matmul(X_input, W1) + B1)
+    Y2 = tf.nn.leaky_relu(tf.matmul(Y1, W2) + B2)
+    Y3 = tf.nn.leaky_relu(tf.matmul(Y2, W3) + B3)
+    Y4 = tf.nn.tanh(tf.matmul(Y3, W3) + B3)
+    Y_logitis = tf.matmul(Y4, W_LAST_LAYER) + B_LAST_LAYER
+    predict = tf.argmax(Y_logitis, 1)
 
     return Y_logitis, predict
 
@@ -209,12 +207,12 @@ class QLearningAgent(bp.Policy):
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
         self.batch_size = BATCH_SIZE
         self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
-        self.ex_replay.store([prev_state, prev_action, reward, new_state])
+        # self.ex_replay.store([prev_state, prev_action, reward, new_state])
 
         x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
         # x_batces_last_move = self.ex_replay.get_last_move_batch(batch_size=self.batch_size)
         for j, batch in enumerate(x_batces_generator):
-            batch = np.reshape(batch, (-1,4))
+            batch = np.reshape(batch, (-1, 4))
             s1_batch = np.asarray([x[0] for x in batch if x[0] is not None])
             action_batch = np.asarray([x[1] for x in batch if x[0] is not None])
             reward_batch = np.asarray([x[2] for x in batch if x[0] is not None])
@@ -222,19 +220,27 @@ class QLearningAgent(bp.Policy):
             # s1, action, reward, s2 = sample
 
             v = self.predict_max(s2_batch, self.batch_size)
-            legal_actions = np.array(np.where(s1_batch[0, :] == EMPTY_VAL))
-            legal_actions = np.reshape(legal_actions, (legal_actions.size,))
 
-            if v not in legal_actions:
-                q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
-            else:
-                q = reward + (GAMMA_FACTOR * v)
+            # legal_actions = [np.array(np.where(sample[0, :] == EMPTY_VAL)) for sample in s1_batch]
+
+            legal_actions = []
+            for sample in s1_batch:
+                a = np.array(np.where(sample[0, :] == EMPTY_VAL))
+                legal_actions.append(a.reshape(a.size, ))
+
+            q = np.asarray([r + (GAMMA_FACTOR * v_i) if a_i in legal else
+                            -1 + (GAMMA_FACTOR * v_i) for r, a_i, v_i, legal in zip(reward_batch, action_batch, v, legal_actions)])[0]
+            # if action not in legal_actions:
+            #     q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
+            # else:
+            #     q = reward + (GAMMA_FACTOR * v)
             feed_dict = {
                 self.input: s1_batch.reshape(-1, STATE_DIM),
                 self.actions: action_batch.reshape(-1, ),
                 self.q_estimation: q.reshape(-1, )
             }
-            self.log("rewards={},q={},v={},actions={}".format( reward_batch,q,v,action_batch))
+            self.log("legal actions:{}".format(legal_actions))
+            self.log("rewards={},q={},v={},actions={}".format(reward_batch, q, v, action_batch))
 
             # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
             self.session.run(self.train_op, feed_dict=feed_dict)
