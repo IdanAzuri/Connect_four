@@ -64,7 +64,7 @@ class ExperienceReplay(object):
             del self.memory_last_move[:100]
 
     def get_batch(self, batch_size=32):
-        '''
+        """
         Here we load one transition <s, a, r, s’> from memory
 
         :param batch_size:
@@ -75,13 +75,13 @@ class ExperienceReplay(object):
         reward_t: reward earned r
         state_tp1: the state that followed s’
         return state_t, action_t, reward_t, state_tp1
-        '''
+        """
         self.memory_len = len(self.memory)
         shuffle_indices = np.random.permutation(min(self.memory_len, batch_size, int(batch_size)))
-        yield np.asarray(self.memory)[shuffle_indices]
+        return np.asarray(self.memory)[shuffle_indices]
 
     def get_last_move_batch(self, batch_size=32):
-        '''
+        """
         Here we load one transition <s, a, r, s’> from memory
 
         :param batch_size:
@@ -92,30 +92,30 @@ class ExperienceReplay(object):
         reward_t: reward earned r
         state_tp1: the state that followed s’
         return state_t, action_t, reward_t, state_tp1
-        '''
+        """
         last_move_len = len(self.memory_last_move)
         last_move_shuffle_indices = np.random.permutation(min(last_move_len, int(batch_size)))
-        yield np.asarray(self.memory_last_move)[last_move_shuffle_indices]
+        return np.asarray(self.memory_last_move)[last_move_shuffle_indices]
 
     def get_balanced_batch(self, batch_size=32):
-        '''
+        """
         Get balanced last move samples and regular samples
         :param batch_size:
         :return: 2 batches
-        '''
+        """
         batch_size /= 2  # divding batch size equally
         batch_samples = []
         last_move_len = len(self.memory_last_move)
         self.memory_len = len(self.memory)
+
         # sampling batch/2 regular game
         shuffle_indices = np.random.permutation(min(int(batch_size), self.memory_len))
         np.random.shuffle(shuffle_indices)  # get shuffled batch
         batch_samples.append(np.asarray(self.memory)[shuffle_indices])
-        # more batched of last state
-        for i in range(2):
-            # sampling batch/2 last move states
-            last_move_shuffle_indices = np.random.permutation(min(last_move_len, int(batch_size)))
-            batch_samples.append(np.asarray(self.memory_last_move)[last_move_shuffle_indices])
+
+        # sampling batch/2 last move states
+        last_move_shuffle_indices = np.random.permutation(min(last_move_len, int(batch_size)))
+        batch_samples.append(np.asarray(self.memory_last_move)[last_move_shuffle_indices])
 
         return np.asarray(batch_samples)
 
@@ -210,43 +210,33 @@ class QLearningAgent(bp.Policy):
         # self.ex_replay.store([prev_state, prev_action, reward, new_state])
 
         x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
-        # x_batces_last_move = self.ex_replay.get_last_move_batch(batch_size=self.batch_size)
-        for j, batch in enumerate(x_batces_generator):
-            batch = np.reshape(batch, (-1, 4))
-            s1_batch = np.asarray([x[0] for x in batch if x[0] is not None])
-            action_batch = np.asarray([x[1] for x in batch if x[0] is not None])
-            reward_batch = np.asarray([x[2] for x in batch if x[0] is not None])
-            s2_batch = np.asarray([x[3] for x in batch if x[0] is not None])
-            # s1, action, reward, s2 = sample
+        for batch in x_batces_generator:
+            for j, sample in enumerate(batch):
+                s1, action, reward, s2 = sample.reshape(4,)
+                if s1 is None:
+                    break
+                v = self.predict_max(s2, self.batch_size)
 
-            v = self.predict_max(s2_batch, self.batch_size)
+                legal_actions = np.array(np.where(s1[0, :] == EMPTY_VAL))
+                legal_actions = np.reshape(legal_actions, (legal_actions.size,))
+                if action not in legal_actions:
+                    q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
+                else:
+                    q = reward + (GAMMA_FACTOR * v)
 
-            # legal_actions = [np.array(np.where(sample[0, :] == EMPTY_VAL)) for sample in s1_batch]
+                feed_dict = {
+                    self.input: s1.reshape(-1, STATE_DIM),
+                    self.actions: action.reshape(-1, ),
+                    self.q_estimation: q.reshape(-1, )
+                }
+                self.log("legal actions:{}".format(legal_actions))
+                self.log("rewards={},q={},v={},actions={}".format(reward, q, v, action))
 
-            legal_actions = []
-            for sample in s1_batch:
-                a = np.array(np.where(sample[0, :] == EMPTY_VAL))
-                legal_actions.append(a.reshape(a.size, ))
+                # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
+                self.session.run(self.train_op, feed_dict=feed_dict)
 
-            q = np.asarray([r + (GAMMA_FACTOR * v_i) if a_i in legal else
-                            -1 + (GAMMA_FACTOR * v_i) for r, a_i, v_i, legal in zip(reward_batch, action_batch, v, legal_actions)])[0]
-            # if action not in legal_actions:
-            #     q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
-            # else:
-            #     q = reward + (GAMMA_FACTOR * v)
-            feed_dict = {
-                self.input: s1_batch.reshape(-1, STATE_DIM),
-                self.actions: action_batch.reshape(-1, ),
-                self.q_estimation: q.reshape(-1, )
-            }
-            self.log("legal actions:{}".format(legal_actions))
-            self.log("rewards={},q={},v={},actions={}".format(reward_batch, q, v, action_batch))
-
-            # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
-            self.session.run(self.train_op, feed_dict=feed_dict)
-
-            # if round % 30 ==0 and i % 11 == 0:
-            self.log("Iteration: {}/{}, round:{}, memory size={}".format(j, self.batch_size, round, self.ex_replay.memory_len))
+                # if round % 30 ==0 and i % 11 == 0:
+                self.log("Iteration: {}/{}, round:{}, memory size={}".format(j, self.batch_size, round, self.ex_replay.memory_len))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
