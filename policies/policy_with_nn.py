@@ -102,7 +102,6 @@ class ExperienceReplay(object):
         targets = np.zeros((inputs.shape[0], num_actions))
 
         # We draw states to learn from randomly
-        # TODO FIX SIZE BATCH_SIZE
         for i, idx in enumerate(np.random.randint(0, len_memory,
                                                   size=inputs.shape[0])):
             """
@@ -291,7 +290,6 @@ class QLearningNetwork(bp.Policy):
                 self.log("Iteration: {}/{}, round:{}, memory size={}".format(i, self.batch_size, round, self.ex_replay.memory_len))
             prev_state, prev_action, reward, new_state = v[0]
 
-            # j = np.random.randint(0,3,1) # num of inner loops TODO solve performance issue
             j = 0
             while j < 2:
                 j += 1
@@ -357,7 +355,6 @@ class QLearningNetwork(bp.Policy):
 
             if (round + 1) % 5000:
                 self.epsilon = max(self.epsilon / 2, 1e-4)
-                # self.save_model()
 
                 # except ValueError as e:
                 #     self.log("ValueError error({0})".format(e), "ERROR")
@@ -380,7 +377,7 @@ class QLearningNetwork(bp.Policy):
         self.ex_replay.store([prev_state, prev_action, reward, new_state], int(reward))
         # TODO maybe to change y argument (tmp_actions)
         action = self.session.run(self.y_argmax, feed_dict={self.x_input: new_state.reshape(-1, STATE_DIM), self.y: temp_actions})[0]
-        if np.random.random() > self.epsilon or action not in legal_actions:
+        if np.random.random() < self.epsilon or action not in legal_actions:
             return np.random.choice(legal_actions)
         else:
             return action
