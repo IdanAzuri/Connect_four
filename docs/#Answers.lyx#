@@ -547,7 +547,7 @@ While{left samples in batch}
 
 
 \backslash
-State{For each possible action a'(1,2,3,4,5,6,7),predict expected future
+State{For each possible action a’ (1,2,3,4,5,6,7), predict expected future
  reward $Q_{t}$ using DNN}
 \end_layout
 
@@ -755,18 +755,10 @@ A detailing of other possible solutions that you tried and decided not to
  
 \end_layout
 
-\begin_layout Standard
-TODO
-\end_layout
-
 \begin_layout Subsubsection*
 
 \series bold
 Any other things you would like to note about your implementation
-\end_layout
-
-\begin_layout Standard
-TODO
 \end_layout
 
 \end_body

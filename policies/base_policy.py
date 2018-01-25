@@ -52,7 +52,7 @@ class Policy(mp.Process):
     using queues.
     """
 
-    def __init__(self, policy_args, stateq, actq, modelq, logq, id, mode, game_duration, eps=0.1):
+    def __init__(self, policy_args, stateq, actq, modelq, logq, id, mode, game_duration):
         """
         initialize the policy.
         :param policy_args: the arguments for the specific policy to be added as members.
@@ -72,7 +72,6 @@ class Policy(mp.Process):
         self.id = id
         self.mode = mode
         self.game_duration = game_duration
-        self.epsilon = eps
         self.__dict__.update(self.cast_string_args(policy_args))
 
 
@@ -115,7 +114,7 @@ class Policy(mp.Process):
                 else:
                     round, prev_state, prev_action, reward, new_state, is_game_over, too_slow = input
                     if is_game_over:
-                        if self.mode == 'train' and prev_state is not None:
+                        if self.mode == 'train':
                             self.learn(round, prev_state, prev_action, reward, new_state, too_slow)
                     else:
                         self.aq.put((round, self.act(round, prev_state, prev_action, reward, new_state, too_slow)))
