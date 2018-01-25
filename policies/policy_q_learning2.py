@@ -243,6 +243,13 @@ class QLearningAgent2(bp.Policy):
             self.optimizer = tf.train.AdamOptimizer(learning_rate=l_rate)
             self.train_op = self.optimizer.minimize(self.loss)
 
+            # y is the next Q
+            self.prediction_vec = tf.placeholder(tf.float32, [None, NUM_ACTIONS], name='predicted')
+            self.loss2 = tf.reduce_sum(tf.square(self.prediction_vec - self.output))
+
+            self.optimizer2 = tf.train.AdamOptimizer(learning_rate=l_rate)
+            self.train_op2 = self.optimizer.minimize(self.loss2)
+
             self.load(None)
 
             self.ex_replay = ExperienceReplay()  # ExperienceReplay(*self.memory_args_dict)
@@ -304,7 +311,7 @@ class QLearningAgent2(bp.Policy):
                         self.log("REWARDED GOOD PREDICTION ={}".format(action_prediction))
                         prediction_vec[0, action_prediction] = int(is_win) + GAMMA_FACTOR * v
 
-                self.session.run(feed_dict={self.x_input: prev_state.reshape(-1, INPUT_SIZE),
+                self.session.run(self.train_op, feed_dict={self.input: s1.reshape(-1, STATE_DIM),
                                             self.output: prediction_vec.reshape(-1, )})
 
                 if action not in legal_actions:
