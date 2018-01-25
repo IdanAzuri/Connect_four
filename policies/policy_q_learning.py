@@ -203,12 +203,15 @@ class QLearningAgent(bp.Policy):
     def manage_no_prev_state(self, new_state):
 
         # make the new state to be prev state
-        prev_state = new_state
-        legal_actions = self.get_legal_moves(new_state)
-        random_move = np.random.permutation(legal_actions)[0]
-        next_state = make_move(prev_state, int(random_move), self.id)
-        reward = int(check_for_win(new_state, self.id, int(random_move)))
-        return prev_state, random_move, reward, next_state
+        try:
+            prev_state = new_state
+            legal_actions = self.get_legal_moves(new_state)
+            random_move = np.random.permutation(legal_actions)[0]
+            generated_state = make_move(prev_state, int(random_move), self.id)
+            reward = int(check_for_win(generated_state, self.id, int(random_move)))
+        except IndexError as e:
+            print("random_move={},prev_state={}\nerror={}".format(random_move,prev_state,e))
+        return prev_state, random_move, reward, generated_state
 
     def deep_nn(self, X_input):
 
@@ -254,7 +257,7 @@ class QLearningAgent(bp.Policy):
                           on_value=True, off_value=False, axis=-1)
         return tf.boolean_mask(self.output, mask)
 
-    def init_run(self, save_path="test_a1.pkl", folder="/tmp/model_connect_4/", l_rate=LEANING_RATE, session=None, epsilon=0.2):
+    def init_run(self, save_path="test_a1.pkl", folder="/tmp/model_connect_4/", l_rate=LEANING_RATE, session=None, epsilon=0.1):
         self.log("Creating model...layers={}|{}|{},batch={}lr={}".format(FC1, FC2, FC3, BATCH_SIZE, l_rate))
         self.learning_rate = LEANING_RATE
         self.wins = 0
@@ -329,6 +332,8 @@ class QLearningAgent(bp.Policy):
                     self.actions: action.reshape(-1, ),
                     self.q_estimation: q.reshape(-1, )
                 }
+                if len(legal_actions) > 7:
+                    self.log("legal actions:{}t1={},t2={}".format(legal_actions,t1,t2, 'ERROR!'))
                 self.log("legal actions:{}".format(legal_actions))
                 self.log("rewards={},q={},v={},actions={}".format(reward, q, v, action))
 
@@ -340,27 +345,31 @@ class QLearningAgent(bp.Policy):
                 self.log("Iteration: {}/{}, round:{}, memory size={}".format(j, self.batch_size, round, self.ex_replay.memory_len))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        action = 0
-        legal_actions = [1,2,3,4,5,6]
-        if prev_state is not None:
-            legal_actions = self.get_legal_moves(new_state)
-            new_state = reshape_double_board(new_state)
-            prev_state = reshape_double_board(prev_state)
-            action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, INPUT_SIZE)})[0]
+        legal_actions, new_state, prev_action, prev_state, reward = self.validate_input(new_state, prev_action, prev_state,reward)
+        new_state = reshape_double_board(new_state)
+        prev_state = reshape_double_board(prev_state)
+        action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, INPUT_SIZE)})[0]
         if self.mode == 'test':
             if action in legal_actions:
                 return action
             else:
                 return np.random.choice(legal_actions)
         else:
-            if prev_state is None and np.count_nonzero(new_state) > 1:
-                prev_state, prev_action, reward, new_state = self.manage_no_prev_state(new_state)
             self.ex_replay.store([prev_state, prev_action, reward, new_state])
-            action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, STATE_DIM)})[0]
+            action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, INPUT_SIZE)})[0]
             if np.random.random() < self.epsilon:
                 return np.random.choice(legal_actions)
             else:
                 return action
+
+    def validate_input(self, new_state, prev_action, prev_state, reward):
+        legal_actions = np.arange(start=0,stop=6)
+        if prev_state is None and np.count_nonzero(new_state) > 0:
+            prev_state, prev_action, reward, new_state = self.manage_no_prev_state(new_state)
+            legal_actions = self.get_legal_moves(new_state)
+        elif prev_state is None:
+            prev_state = np.zeros_like(new_state)
+        return legal_actions, new_state, prev_action, prev_state, reward
 
     def load(self, path=None):
         """Load weights or init variables if path==None."""
