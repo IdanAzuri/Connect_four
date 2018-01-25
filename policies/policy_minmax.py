@@ -170,5 +170,5 @@ class MinmaxAgent(bp.Policy):
 
     def save_model(self):
 
-        # return [self.session.run(self.W), self.session.run(self.b)], None
-        pass
+        return [self.session.run(self.W), self.session.run(self.b)], None
+

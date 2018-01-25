@@ -1,4 +1,5 @@
 import os
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -13,8 +14,8 @@ GAMMA_FACTOR = 0.99
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6  # board size
 INPUT_SIZE = STATE_DIM
-FC1 = 128
-FC2 = 64
+FC1 = 512
+FC2 = 128
 FC3 = 64
 # FC4 = 32
 EMPTY_VAL = 0
@@ -117,7 +118,6 @@ class ExperienceReplay(object):
         np.random.shuffle(shuffle_indices)  # get shuffled batch
         batch_samples.append(np.asarray(self.memory)[shuffle_indices])
 
-
         return np.asarray(batch_samples)
 
 
@@ -134,31 +134,43 @@ def bias_variable(shape):
     return tf.Variable(initial)
 
 
-def deep_nn(X_input):
-    W1 = weight_variable([INPUT_SIZE, FC1], name="W1")
-    B1 = bias_variable([FC1])
-    W2 = weight_variable([FC1, FC2], name="W2")
-    B2 = bias_variable([FC2])
-    W3 = weight_variable([FC2, FC3], name="W3")
-    B3 = bias_variable([FC3])
-    # W4 = weight_variable([FC3, FC4], name="W4")
-    # B4 = bias_variable([FC4])
-    W_LAST_LAYER = weight_variable([FC3, NUM_ACTIONS], name="W_LAST_LAYER")
-    B_LAST_LAYER = bias_variable([NUM_ACTIONS])
-
-    # The model
-    X_input = tf.reshape(X_input, [-1, INPUT_SIZE])
-    Y1 = tf.nn.leaky_relu(tf.matmul(X_input, W1) + B1)
-    Y2 = tf.nn.leaky_relu(tf.matmul(Y1, W2) + B2)
-    Y3 = tf.nn.leaky_relu(tf.matmul(Y2, W3) + B3)
-    Y4 = tf.nn.tanh(tf.matmul(Y3, W3) + B3)
-    Y_logitis = tf.matmul(Y4, W_LAST_LAYER) + B_LAST_LAYER
-    predict = tf.argmax(Y_logitis, 1)
-
-    return Y_logitis, predict
-
-
 class QLearningAgent(bp.Policy):
+    def deep_nn(self, X_input):
+
+        # The model
+        X_input = tf.reshape(X_input, [-1, INPUT_SIZE])
+        Y1 = tf.nn.leaky_relu(tf.matmul(X_input, self.W1) + self.B1)
+        Y2 = tf.nn.leaky_relu(tf.matmul(Y1, self.W2) + self.B2)
+        Y3 = tf.nn.leaky_relu(tf.matmul(Y2, self.W3) + self.B3)
+        Y4 = tf.nn.tanh(tf.matmul(Y3, self.W3) + self.B3)
+        Y_logitis = tf.matmul(Y4, self.W_LAST_LAYER) + self.B_LAST_LAYER
+        predict = tf.argmax(Y_logitis, 1)
+
+        return Y_logitis, predict
+
+    def init_variables(self):
+        try:
+            model = pickle.load(open(self.load_from, 'rb'))
+            self.W1 = tf.Variable(tf.constant(model[0]))
+            self.B1 = tf.Variable(tf.constant(model[1]))
+            self.W2 = tf.Variable(tf.constant(model[2]))
+            self.B2 = tf.Variable(tf.constant(model[3]))
+            self.W3 = tf.Variable(tf.constant(model[4]))
+            self.B3 = tf.Variable(tf.constant(model[5]))
+            self.W_LAST_LAYER = tf.Variable(tf.constant(model[6]))
+            self.B_LAST_LAYER = tf.Variable(tf.constant(model[7]))
+        except:
+            self.W1 = weight_variable([INPUT_SIZE, FC1], name="W1")
+            self.B1 = bias_variable([FC1])
+            self.W2 = weight_variable([FC1, FC2], name="W2")
+            self.B2 = bias_variable([FC2])
+            self.W3 = weight_variable([FC2, FC3], name="W3")
+            self.B3 = bias_variable([FC3])
+            # W4 = weight_variable([FC3, FC4], name="W4")
+            # B4 = bias_variable([FC4])
+            self.W_LAST_LAYER = weight_variable([FC3, NUM_ACTIONS], name="W_LAST_LAYER")
+            self.B_LAST_LAYER = bias_variable([NUM_ACTIONS])
+
     def take(self, indices):
         """Return an operation that takes values from network outputs.
         e.g. NN.predict_max() == NN.take(NN.predict_argmax())
@@ -167,21 +179,23 @@ class QLearningAgent(bp.Policy):
                           on_value=True, off_value=False, axis=-1)
         return tf.boolean_mask(self.output, mask)
 
-    def init_run(self, save_path="/tmp/model_connect_4/", l_rate=LEANING_RATE, session=None, epsilon=0.1):
-
+    def init_run(self, save_path="test_a1.pkl", folder="/tmp/model_connect_4/",l_rate=LEANING_RATE, session=None, epsilon=0.1):
         self.log("Creating model...layers={}|{}|{},batch={}lr={}".format(FC1, FC2, FC3, BATCH_SIZE, l_rate))
         self.learning_rate = LEANING_RATE
         self.wins = 0
         self.save_to = save_path
+        self.model_folder = folder
+        self.load_from = "models/" + self.save_to  # not sure about that
+        self.epsilon = epsilon
 
         self.g = tf.Graph()
         with self.g.as_default():
-            self.session = tf.Session() if session is None else session
             self.saver = None
-
             self.input = tf.placeholder(tf.float32, shape=(None, INPUT_SIZE), name="input")
             self.actions = tf.placeholder(tf.int32, (None,), "actions")
-            self.output, self.output_argmax = deep_nn(self.input)
+            self.init_variables()
+
+            self.output, self.output_argmax = self.deep_nn(self.input)
             self.output_max = tf.reduce_max(self.output, axis=1)
             self.q_values = self.take(self.actions)
             self.q_estimation = tf.placeholder(tf.float32, (None,),
@@ -190,8 +204,9 @@ class QLearningAgent(bp.Policy):
 
             self.optimizer = tf.train.AdamOptimizer(learning_rate=l_rate)
             self.train_op = self.optimizer.minimize(self.loss)
-
-            self.load(None)
+            self.session = tf.Session()
+            self.session.run(tf.global_variables_initializer())
+            # self.load(None)
 
             self.ex_replay = ExperienceReplay()  # ExperienceReplay(*self.memory_args_dict)
 
@@ -210,7 +225,8 @@ class QLearningAgent(bp.Policy):
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
         self.batch_size = BATCH_SIZE
-        self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
+        if prev_state is not None and new_state is not None:
+            self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
         # self.ex_replay.store([prev_state, prev_action, reward, new_state])
 
         x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
@@ -221,12 +237,11 @@ class QLearningAgent(bp.Policy):
                     break
                 arg_v, v = self.predict_max(s2, self.batch_size)
 
-                legal_actions = np.array(np.where(s1[0, :] == EMPTY_VAL))
-                legal_actions = np.reshape(legal_actions, (legal_actions.size,))
+                legal_actions = self.get_legal_moves(s1)
                 if action not in legal_actions:
                     self.log("PUNISHED FOR ACTION ={}".format(action))
                     q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
-                elif reward == 1: # win or lose the game
+                elif reward == 1:  # win or lose the game
                     q = np.asarray([reward])
                 else:
                     q = reward + (GAMMA_FACTOR * v)
@@ -247,17 +262,21 @@ class QLearningAgent(bp.Policy):
                 self.log("Iteration: {}/{}, round:{}, memory size={}".format(j, self.batch_size, round, self.ex_replay.memory_len))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
-        legal_actions = np.reshape(legal_actions, (legal_actions.size,))
-        if prev_state is not None:
-            self.ex_replay.store([prev_state, prev_action, reward, new_state])
-        action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, STATE_DIM)})[0]
-        if np.random.random() < self.epsilon:
-            return np.random.choice(legal_actions)
-        elif action in legal_actions:
-            return action
+        legal_actions = self.get_legal_moves(new_state)
+        if self.mode == 'test':
+            action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, STATE_DIM)})[0]
+            if action in legal_actions:
+                return action
+            else:
+                return np.random.choice(legal_actions)
         else:
-            return np.random.choice(legal_actions)
+            if prev_state is not None:
+                self.ex_replay.store([prev_state, prev_action, reward, new_state])
+            action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, STATE_DIM)})[0]
+            if np.random.random() < self.epsilon:
+                return np.random.choice(legal_actions)
+            else:
+                return action
 
     def load(self, path=None):
         """Load weights or init variables if path==None."""
@@ -279,7 +298,7 @@ class QLearningAgent(bp.Policy):
             self.log("Model has been loaded successfully, {},{}".format(fname, int(newest.parts[-2])))
             return int(newest.parts[-2])
 
-    def save_model(self):
+    def save_model_old(self):
         """Save the current graph."""
         if self.saver is None:
             with self.g.as_default():
@@ -297,3 +316,10 @@ class QLearningAgent(bp.Policy):
                                                                            BATCH_SIZE, self.learning_rate))
 
         return
+
+    def save_model(self):
+        return [self.session.run(self.W1), self.session.run(self.B1),
+                self.session.run(self.W2), self.session.run(self.B2),
+                self.session.run(self.W3), self.session.run(self.B3),
+                self.session.run(self.W_LAST_LAYER), self.session.run(self.B_LAST_LAYER)
+                ], self.save_to

@@ -262,7 +262,7 @@ today}
 \begin_layout Section
 
 \size larger
-Practice Results
+Practical Results
 \end_layout
 
 \begin_layout Subsubsection*
@@ -547,7 +547,7 @@ While{left samples in batch}
 
 
 \backslash
-State{For each possible action a’ (1,2,3,4,5,6,7), predict expected future
+State{For each possible action a'(1,2,3,4,5,6,7),predict expected future
  reward $Q_{t}$ using DNN}
 \end_layout
 
@@ -555,8 +555,8 @@ State{For each possible action a’ (1,2,3,4,5,6,7), predict expected future
 
 
 \backslash
-State{Choose the highest value of the actions predictions $max_{a} Q(s',a')$}
- 
+State{Choose the highest value of the actions predictions $max_{a'} Q_{t+1}(s',a
+')$} 
 \backslash
 Comment in our case we have 7 actions
 \end_layout
@@ -755,10 +755,18 @@ A detailing of other possible solutions that you tried and decided not to
  
 \end_layout
 
+\begin_layout Standard
+TODO
+\end_layout
+
 \begin_layout Subsubsection*
 
 \series bold
 Any other things you would like to note about your implementation
+\end_layout
+
+\begin_layout Standard
+TODO
 \end_layout
 
 \end_body
