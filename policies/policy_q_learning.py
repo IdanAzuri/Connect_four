@@ -110,8 +110,9 @@ class ExperienceReplay(object):
     def store_last_move(self, states):
         # Save a state to memory, game over = 1 otherwise 0
         # will learn also the inverse last move
-        flip_states = inverse_last_move(states)
-        self.memory_last_move.append([flip_states])
+        # TODO - need to decide if to implement
+        # flip_states = inverse_last_move(states)
+        # self.memory_last_move.append([flip_states])
         self.memory_last_move.append([states])
         # We don't want to store infinite memories, so if we have too many, we just delete the oldest one
         if len(self.memory_last_move) > self.max_memory:
@@ -301,6 +302,7 @@ class QLearningAgent(bp.Policy):
         return out_max, out_argmax
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
+        learn_inverse_flag = False
         self.batch_size = BATCH_SIZE
         if prev_state is not None and new_state is not None:
             new_state = reshape_double_board(new_state)
@@ -316,7 +318,7 @@ class QLearningAgent(bp.Policy):
                 s1, action, reward, s2 = sample.reshape(4, )
                 if s1 is None:
                     break
-                arg_v, v = self.predict_max(s2, self.batch_size)
+                v, arg_v = self.predict_max(s2, self.batch_size)
                 t1,t2 = np.split(s1,2,axis=1) #recovering original board
                 legal_actions = self.get_legal_moves(t1 + t2)
                 if action not in legal_actions:
@@ -324,6 +326,8 @@ class QLearningAgent(bp.Policy):
                     q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
                 elif reward == 1:  # win or lose the game
                     q = np.asarray([reward])
+                    learn_inverse_flag = True
+
                 else:
                     q = reward + (GAMMA_FACTOR * v)
 
@@ -332,6 +336,7 @@ class QLearningAgent(bp.Policy):
                     self.actions: action.reshape(-1, ),
                     self.q_estimation: q.reshape(-1, )
                 }
+
                 if len(legal_actions) > 7:
                     self.log("legal actions:{}t1={},t2={}".format(legal_actions,t1,t2, 'ERROR!'))
                 self.log("legal actions:{}".format(legal_actions))
@@ -339,6 +344,16 @@ class QLearningAgent(bp.Policy):
 
                 # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
                 self.session.run(self.train_op, feed_dict=feed_dict)
+                if learn_inverse_flag:
+                    # s1, action, reward, s2
+                    flip_s1, action, reward, flip_s2 = inverse_last_move([s1, action, reward, s2])
+                    feed_dict = {
+                        self.input: flip_s1.reshape(-1, INPUT_SIZE),
+                        self.actions: action.reshape(-1, ),
+                        self.q_estimation: q.reshape(-1, )
+                    }
+                    self.session.run(self.train_op, feed_dict=feed_dict)
+                    learn_inverse_flag = False
                 if (round + 1) % 200 == 0: #if (round + 1) % 500 == 0:
                     self.epsilon = max(self.epsilon / 2, 1e-4)
                 # if round % 30 ==0 and i % 11 == 0:
