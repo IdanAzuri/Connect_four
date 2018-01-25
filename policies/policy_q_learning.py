@@ -5,17 +5,18 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 
+
 np.random.seed(1231)
 from policies import base_policy as bp
 
 LEANING_RATE = 5e-3
-BATCH_SIZE = 20
+BATCH_SIZE = 4
 GAMMA_FACTOR = 0.9
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6 * 2  # board size
 INPUT_SIZE = STATE_DIM
-FC1 = 128
-FC2 = 64
+FC1 = 64
+FC2 = 32
 FC3 = 32
 EMPTY_VAL = 0
 PLAYER1_ID = 1
@@ -158,7 +159,7 @@ class ExperienceReplay(object):
         :param batch_size:
         :return: 2 batches
         """
-        batch_size /= 2  # divding batch size equally
+        batch_size /= 4  # divding batch size equally
         batch_samples = []
         last_move_len = len(self.memory_last_move)
         self.memory_len = len(self.memory)
@@ -168,11 +169,11 @@ class ExperienceReplay(object):
         batch_samples.append(np.asarray(self.memory_last_move)[last_move_shuffle_indices])
 
         # sampling batch/2 regular game
-        shuffle_indices = np.random.permutation(min(int(batch_size), self.memory_len))
+        shuffle_indices = np.random.permutation(min(int(batch_size*3), self.memory_len))
         np.random.shuffle(shuffle_indices)  # get shuffled batch
         batch_samples.append(np.asarray(self.memory)[shuffle_indices])
 
-        return np.asarray(batch_samples)
+        return batch_samples
 
 
 # Helper functions
@@ -214,7 +215,6 @@ class QLearningAgent(bp.Policy):
         Y1 = tf.nn.relu(tf.matmul(X_input, self.W1) + self.B1)
         Y2 = tf.nn.relu(tf.matmul(Y1, self.W2) + self.B2)
         Y3 = tf.nn.sigmoid(tf.matmul(Y2, self.W3) + self.B3)
-        # Y4 = tf.nn.tanh(tf.matmul(Y3, self.W4) + self.B4)
         Y_logitis = tf.matmul(Y3, self.W_LAST_LAYER) + self.B_LAST_LAYER
         predict = tf.argmax(Y_logitis, 1)
 
@@ -238,8 +238,6 @@ class QLearningAgent(bp.Policy):
             self.B2 = bias_variable([FC2])
             self.W3 = weight_variable([FC2, FC3], name="W3")
             self.B3 = bias_variable([FC3])
-            # W4 = weight_variable([FC3, FC4], name="W4")
-            # B4 = bias_variable([FC4])
             self.W_LAST_LAYER = weight_variable([FC3, NUM_ACTIONS], name="W_LAST_LAYER")
             self.B_LAST_LAYER = bias_variable([NUM_ACTIONS])
 
@@ -251,11 +249,12 @@ class QLearningAgent(bp.Policy):
                           on_value=True, off_value=False, axis=-1)
         return tf.boolean_mask(self.output, mask)
 
-    def init_run(self, save_path="test_a1.pkl", folder="/tmp/model_connect_4/", l_rate=LEANING_RATE, session=None, epsilon=0.1):
+    def init_run(self, save_path="policy_302867833.model.pkl", folder="/tmp/model_connect_4/", l_rate=LEANING_RATE,
+                 session=None, epsilon=0.1):
         self.log("Creating model...layers={}|{}|{},batch={}lr={}".format(FC1, FC2, FC3, BATCH_SIZE, l_rate))
         self.learning_rate = LEANING_RATE
-        self.wins = 0
-        # self.save_to = save_path
+        self.batch_size = BATCH_SIZE
+        self.save_to = save_path
         self.model_folder = folder
         self.load_from = "models/" + self.save_to  # not sure about that
         self.epsilon = epsilon
@@ -279,7 +278,7 @@ class QLearningAgent(bp.Policy):
             self.session.run(tf.global_variables_initializer())
             # self.load(None)
 
-            self.ex_replay = ExperienceReplay()  # ExperienceReplay(*self.memory_args_dict)
+            self.ex_replay = ExperienceReplay()
 
     def cast_string_args(self, policy_args):
         # Example
@@ -294,16 +293,13 @@ class QLearningAgent(bp.Policy):
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
         learn_inverse_flag = False
-        self.batch_size = BATCH_SIZE
         if prev_state is not None and new_state is not None:
             new_state = reshape_double_board(new_state)
             prev_state = reshape_double_board(prev_state)
-            # self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
-            self.ex_replay.store([prev_state, prev_action, reward, new_state])
+            self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
+            # self.ex_replay.store([prev_state, prev_action, reward, new_state])
 
-        # self.ex_replay.store([prev_state, prev_action, reward, new_state])
-
-        x_batces_generator = self.ex_replay.get_batch(batch_size=self.batch_size)
+        x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
         for batch in x_batces_generator:
             for j, sample in enumerate(batch):
                 s1, action, reward, s2 = sample.reshape(4, )
@@ -327,7 +323,7 @@ class QLearningAgent(bp.Policy):
                     self.q_estimation: q.reshape(-1, )
                 }
 
-                self.log("rewards={},q={},v={},actions={}".format(reward, q, v, action))
+                # self.log("rewards={},q={},v={},actions={}".format(reward, q, v, action))
 
                 # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
                 self.session.run(self.train_op, feed_dict=feed_dict)
@@ -341,10 +337,8 @@ class QLearningAgent(bp.Policy):
                     }
                     self.session.run(self.train_op, feed_dict=feed_dict)
                     learn_inverse_flag = False
-                if (round + 1) % 200 == 0:  # if (round + 1) % 500 == 0:
+                if (round + 1) % 200 == 0:
                     self.epsilon = max(self.epsilon / 2, 1e-4)
-                # if round % 30 ==0 and i % 11 == 0:
-                self.log("Iteration: {}/{}, round:{}, memory size={}".format(j, self.batch_size, round, self.ex_replay.memory_len))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         legal_actions, new_state, prev_action, prev_state, reward = self.validate_input(new_state, prev_action, prev_state, reward)
@@ -404,8 +398,6 @@ class QLearningAgent(bp.Policy):
         fname = str(p / "{}{}".format(self.id, self.ex_replay.memory_len) / "model.ckpt")
         self.saver.save(self.session, fname)
         self.log("Model saved in file: %s" % self.save_to)
-        self.log("moves_{}_player_{}_layers={}_{}_{}_batch={}lr_{}".format(self.ex_replay.memory_len, self.id, FC1, FC2, FC3,
-                                                                           BATCH_SIZE, self.learning_rate))
 
         return
 
