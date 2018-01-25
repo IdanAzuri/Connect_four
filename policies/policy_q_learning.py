@@ -9,15 +9,14 @@ np.random.seed(1231)
 from policies import base_policy as bp
 
 LEANING_RATE = 5e-3
-BATCH_SIZE = 4
-GAMMA_FACTOR = 0.97
+BATCH_SIZE = 20
+GAMMA_FACTOR = 0.9
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6 * 2  # board size
 INPUT_SIZE = STATE_DIM
 FC1 = 128
-FC2 = 128
-FC3 = 64
-# FC4 = 32
+FC2 = 64
+FC3 = 32
 EMPTY_VAL = 0
 PLAYER1_ID = 1
 PLAYER2_ID = 2
@@ -212,9 +211,9 @@ class QLearningAgent(bp.Policy):
 
         # The model
         X_input = tf.reshape(X_input, [-1, INPUT_SIZE])
-        Y1 = tf.nn.leaky_relu(tf.matmul(X_input, self.W1) + self.B1)
-        Y2 = tf.nn.leaky_relu(tf.matmul(Y1, self.W2) + self.B2)
-        Y3 = tf.nn.leaky_relu(tf.matmul(Y2, self.W3) + self.B3)
+        Y1 = tf.nn.relu(tf.matmul(X_input, self.W1) + self.B1)
+        Y2 = tf.nn.relu(tf.matmul(Y1, self.W2) + self.B2)
+        Y3 = tf.nn.sigmoid(tf.matmul(Y2, self.W3) + self.B3)
         # Y4 = tf.nn.tanh(tf.matmul(Y3, self.W4) + self.B4)
         Y_logitis = tf.matmul(Y3, self.W_LAST_LAYER) + self.B_LAST_LAYER
         predict = tf.argmax(Y_logitis, 1)
@@ -299,11 +298,12 @@ class QLearningAgent(bp.Policy):
         if prev_state is not None and new_state is not None:
             new_state = reshape_double_board(new_state)
             prev_state = reshape_double_board(prev_state)
-            self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
+            # self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
+            self.ex_replay.store([prev_state, prev_action, reward, new_state])
 
         # self.ex_replay.store([prev_state, prev_action, reward, new_state])
 
-        x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
+        x_batces_generator = self.ex_replay.get_batch(batch_size=self.batch_size)
         for batch in x_batces_generator:
             for j, sample in enumerate(batch):
                 s1, action, reward, s2 = sample.reshape(4, )
