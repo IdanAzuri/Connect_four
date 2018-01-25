@@ -8,7 +8,7 @@ np.random.seed(1231)
 from policies import base_policy as bp
 
 LEANING_RATE = 1e-2
-BATCH_SIZE = 16
+BATCH_SIZE = 4
 GAMMA_FACTOR = 0.99
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6  # board size
