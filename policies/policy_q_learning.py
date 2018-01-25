@@ -8,11 +8,11 @@ import tensorflow as tf
 np.random.seed(1231)
 from policies import base_policy as bp
 
-LEANING_RATE = 1e-2
+LEANING_RATE = 5e-3
 BATCH_SIZE = 4
-GAMMA_FACTOR = 0.99
+GAMMA_FACTOR = 0.97
 NUM_ACTIONS = 7
-STATE_DIM = 7 * 6 *2 # board size
+STATE_DIM = 7 * 6 * 2  # board size
 INPUT_SIZE = STATE_DIM
 FC1 = 128
 FC2 = 128
@@ -85,6 +85,7 @@ def make_move(board, action, player_id):
     new_board[row, action] = player_id
 
     return new_board
+
 
 class ExperienceReplay(object):
     """
@@ -191,27 +192,20 @@ def bias_variable(shape):
 def reshape_double_board(state):
     b_1 = state % 2
     b_2 = state - b_1
-    try:
-        new_board=np.concatenate([b_1,b_2], axis=1)
-    except ValueError as e:
-        print("b1={}\nb2={}\n,b1_shape={},b2_shape={}".format(b_1,b_2,b_1.shape,b_2.shape))
-        print(e)
+    new_board = np.concatenate([b_1, b_2], axis=1)
     return new_board
 
 
 class QLearningAgent(bp.Policy):
 
     def manage_no_prev_state(self, new_state):
-
         # make the new state to be prev state
-        try:
-            prev_state = new_state
-            legal_actions = self.get_legal_moves(new_state)
-            random_move = np.random.permutation(legal_actions)[0]
-            generated_state = make_move(prev_state, int(random_move), self.id)
-            reward = int(check_for_win(generated_state, self.id, int(random_move)))
-        except IndexError as e:
-            print("random_move={},prev_state={}\nerror={}".format(random_move,prev_state,e))
+        prev_state = new_state
+        legal_actions = self.get_legal_moves(new_state)
+        random_move = np.random.permutation(legal_actions)[0]
+        generated_state = make_move(prev_state, int(random_move), self.id)
+        reward = int(check_for_win(generated_state, self.id, int(random_move)))
+
         return prev_state, random_move, reward, generated_state
 
     def deep_nn(self, X_input):
@@ -262,7 +256,7 @@ class QLearningAgent(bp.Policy):
         self.log("Creating model...layers={}|{}|{},batch={}lr={}".format(FC1, FC2, FC3, BATCH_SIZE, l_rate))
         self.learning_rate = LEANING_RATE
         self.wins = 0
-        self.save_to = save_path
+        # self.save_to = save_path
         self.model_folder = folder
         self.load_from = "models/" + self.save_to  # not sure about that
         self.epsilon = epsilon
@@ -296,10 +290,8 @@ class QLearningAgent(bp.Policy):
     def predict_max(self, inputs_feed, batch_size=None):
         """Return max on NN outputs."""
         self.output_max = tf.reduce_max(self.output, axis=1)
-        out_max, out_argmax = self.session.run([self.output_max, self.output_argmax],
-                                               feed_dict={self.input: inputs_feed.reshape(-1,
-                                                                                          INPUT_SIZE)})
-        return out_max, out_argmax
+        out_max = self.session.run(self.output_max, feed_dict={self.input: inputs_feed.reshape(-1, INPUT_SIZE)})
+        return out_max
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
         learn_inverse_flag = False
@@ -309,7 +301,6 @@ class QLearningAgent(bp.Policy):
             prev_state = reshape_double_board(prev_state)
             self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
 
-
         # self.ex_replay.store([prev_state, prev_action, reward, new_state])
 
         x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
@@ -318,16 +309,15 @@ class QLearningAgent(bp.Policy):
                 s1, action, reward, s2 = sample.reshape(4, )
                 if s1 is None:
                     break
-                v, arg_v = self.predict_max(s2, self.batch_size)
-                t1,t2 = np.split(s1,2,axis=1) #recovering original board
-                legal_actions = self.get_legal_moves(t1 + t2)
-                if action not in legal_actions:
-                    self.log("PUNISHED FOR ACTION ={}".format(action))
-                    q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
-                elif reward == 1:  # win or lose the game
+                v = self.predict_max(s2, self.batch_size)
+                # t1, t2 = np.split(s1, 2, axis=1)  # recovering original board
+                # legal_actions = self.get_legal_moves(t1 + t2)
+                # if action not in legal_actions:
+                #     self.log("PUNISHED FOR ACTION ={}".format(action))
+                #     q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
+                if reward == 1:  # win or lose the game
                     q = np.asarray([reward])
                     learn_inverse_flag = True
-
                 else:
                     q = reward + (GAMMA_FACTOR * v)
 
@@ -337,9 +327,6 @@ class QLearningAgent(bp.Policy):
                     self.q_estimation: q.reshape(-1, )
                 }
 
-                if len(legal_actions) > 7:
-                    self.log("legal actions:{}t1={},t2={}".format(legal_actions,t1,t2, 'ERROR!'))
-                self.log("legal actions:{}".format(legal_actions))
                 self.log("rewards={},q={},v={},actions={}".format(reward, q, v, action))
 
                 # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
@@ -354,13 +341,13 @@ class QLearningAgent(bp.Policy):
                     }
                     self.session.run(self.train_op, feed_dict=feed_dict)
                     learn_inverse_flag = False
-                if (round + 1) % 200 == 0: #if (round + 1) % 500 == 0:
+                if (round + 1) % 200 == 0:  # if (round + 1) % 500 == 0:
                     self.epsilon = max(self.epsilon / 2, 1e-4)
                 # if round % 30 ==0 and i % 11 == 0:
                 self.log("Iteration: {}/{}, round:{}, memory size={}".format(j, self.batch_size, round, self.ex_replay.memory_len))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        legal_actions, new_state, prev_action, prev_state, reward = self.validate_input(new_state, prev_action, prev_state,reward)
+        legal_actions, new_state, prev_action, prev_state, reward = self.validate_input(new_state, prev_action, prev_state, reward)
         new_state = reshape_double_board(new_state)
         prev_state = reshape_double_board(prev_state)
         action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, INPUT_SIZE)})[0]
@@ -378,7 +365,7 @@ class QLearningAgent(bp.Policy):
                 return action
 
     def validate_input(self, new_state, prev_action, prev_state, reward):
-        legal_actions = np.arange(start=0,stop=6)
+        legal_actions = np.arange(start=0, stop=6)
         if prev_state is None and np.count_nonzero(new_state) > 0:
             prev_state, prev_action, reward, new_state = self.manage_no_prev_state(new_state)
             legal_actions = self.get_legal_moves(new_state)
