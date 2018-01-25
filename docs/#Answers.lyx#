@@ -272,9 +272,17 @@ Board representation
 \end_layout
 
 \begin_layout Standard
-We chose to represent the board as a vector in dimension (batch_size, 42).
- The optimal board representation should be smooth so it will be possible
- to use SGD to optimization for our objective function.
+We chose to represent the board as a vector in dimension 
+\begin_inset Formula $7\times12$
+\end_inset
+
+.
+ The intuition behind that was to simplify the board separating the players
+ hence, we divided the board for two matrices of 
+\begin_inset Formula $6\times7$
+\end_inset
+
+ each board contains only one player pieces.
  Another parameter that we considered is the minimal divergence rate is
  also possible for all games, but unlike with smoothness is actually practical
  for a reasonable number of games.
@@ -293,8 +301,6 @@ We chose to represent the board as a vector in dimension (batch_size, 42).
 .
  In that manner also (6,7) shape would be a good choice, because it has
  this property.
- So the consideration of choosing this shape was to simplify our deep neural
- network and and to make an easier representation in our code 
 \end_layout
 
 \begin_layout Subsubsection*
@@ -647,7 +653,7 @@ LeakyRelu(Dense(Input,128))\implies LeakyRelu(Dense(128,64))\implies\text{LeakyR
 
 \begin_layout Standard
 where input - 
-\begin_inset Formula $(batch\,size,42)\;;\,\,actions-(7,)$
+\begin_inset Formula $(batch\,size,84)\;;\,\,actions-(7,)$
 \end_inset
 
 
@@ -686,7 +692,23 @@ We thought about how to teach the model more last moves without playing
  the entire game, or maybe how can we teach the model to block the opponent
  when he is closed to win.
  We came up with an idea the invert the board hence switch between player
- 1 and player 2 pieces TODO****
+ 1 and player 2 pieces so the model would learn how to block the opponent.
+ For instance in case that we are player 1 and player 2 is going to win
+ in the next move, if we will reward player 1 to win the inverted game it
+ actually the same as training it to block his opponent.
+ To do so on each sample we save in the ExperienceReplay in the 
+\begin_inset Quotes eld
+\end_inset
+
+last move
+\begin_inset Quotes erd
+\end_inset
+
+ data structure, we also save the inverted game.
+ Moreover, in order to boost the model to block player 2 one move before
+ win - we take the games we won, invert them and then we reward the model
+ for the same action that it would play to win, just that in this case he
+ rewarded for blocking.
 \end_layout
 
 \begin_layout Subsubsection*
@@ -724,11 +746,11 @@ One problem found in many areas of AI is the exploration problem.
 \end_layout
 
 \begin_layout Standard
-In our model we used exploration rate of 10% which decays 
+In our model we used exploration rate of 20% which decays 
 \begin_inset Formula $\times2$
 \end_inset
 
- every 5000 rounds all the way to 0.1% and it stays there for the rest of
+ every 200 rounds all the way to 0.1% and it stays there for the rest of
  the game.
  We didn't have enough time to benchmark the different values of exploration-exp
 loitation values but as a rule of thumb you do not want to eliminate the
@@ -739,34 +761,51 @@ n a big portion of the moves, according to that we determined this ratio.
 \begin_layout Subsubsection*
 
 \series bold
-A short description of the tests and results you got when you trained your
+A short description of the tests and results you got when we trained your
  policy 
 \end_layout
 
 \begin_layout Standard
-TODO
+We preformed tests on relatively short runs but 
 \end_layout
 
 \begin_layout Subsubsection*
 
 \series bold
-A detailing of other possible solutions that you tried and decided not to
- hand in and why (if were are any).
+A detailing of other possible solutions that we tried
+\end_layout
+
+\begin_layout Standard
+We tried many models with the same method of Q-Network (we didn't implemented
+ more methods due to lack in time).
+ We use the simple Q-Network model for benchmarking many variants that we
+ tried.
+ One interesting trial that we had - we implemented a model with two objective
+ functions when the first loss was the same as the Q-Network and the second
+ loss function was to minimize the probability vector of the actions for
+ the predicted state for prev_state.
+ Another trial was to use CNN instead DNN from the reason the model can
+ use the convolutional layers to catch a connected four (filters with receptive
+ field of four).
  
 \end_layout
 
 \begin_layout Standard
-TODO
+However all of these models did not show an improvement in the long run.
 \end_layout
 
 \begin_layout Subsubsection*
 
 \series bold
-Any other things you would like to note about your implementation
+Additional notes on our model
 \end_layout
 
 \begin_layout Standard
-TODO
+We mainly dealt with improving our techniques to have a better learning
+ for any king of policy (as described in Our model section), but we did
+ not have time for hyperparamters tuning and implementing different policies
+ which probably would produce a big in performances.
+ 
 \end_layout
 
 \end_body
