@@ -311,7 +311,7 @@ class QLearningAgent2(bp.Policy):
                         self.log("REWARDED GOOD PREDICTION ={}".format(action_prediction))
                         prediction_vec[0, action_prediction] = int(is_win) + GAMMA_FACTOR * v
 
-                self.session.run(self.train_op, feed_dict={self.input: s1.reshape(-1, STATE_DIM),
+                self.session.run(self.output, feed_dict={self.input: s1.reshape(-1, STATE_DIM),
                                             self.output: prediction_vec.reshape(-1, )})
 
                 if action not in legal_actions:
