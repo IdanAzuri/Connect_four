@@ -49,7 +49,7 @@ class ExperienceReplay(object):
     In training, batches of randomly drawn experiences are used to generate the input and target for training.
     """
 
-    def __init__(self, session, x_placeholder, y_placeholder, y_logits, max_memory=2e7, discount=GAMMA_FACTOR):
+    def __init__(self, session, x_placeholder, y_placeholder, y_logits, max_memory=1e7, discount=GAMMA_FACTOR):
         '''
         max_memory: the maximum number of experiences we want to store
         memory: a list of experiences
@@ -272,8 +272,8 @@ class QLearningNetwork(bp.Policy):
             # create lists to contain total rewards and steps per episode
             self.steps_list = []
             self.rewards_list = []
-            # self.load("/tmp/model_connect_4/")
-            self.load()
+            self.load("/tmp/model_connect_4/")
+            # self.load()
             self.memory_args_dict = {'session': self.session, 'x_placeholder': self.x_input, 'y_placeholder': self.y,
                                      'y_logits': self.y_logitis}
             self.ex_replay = ExperienceReplay(*self.memory_args_dict)
@@ -354,7 +354,7 @@ class QLearningNetwork(bp.Policy):
                 new_state = state_after_predicted_action
             # Reduce chance of random action as we train the model.
 
-            if (round + 1) % 5000:
+            if (round + 1) % 5000 == 0:
                 self.epsilon = max(self.epsilon / 2, 1e-4)
 
                 # except ValueError as e:
