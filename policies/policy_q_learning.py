@@ -8,7 +8,7 @@ np.random.seed(1231)
 from policies import base_policy as bp
 
 LEANING_RATE = 1e-2
-BATCH_SIZE = 4
+BATCH_SIZE = 16
 GAMMA_FACTOR = 0.99
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6  # board size
@@ -42,9 +42,6 @@ class ExperienceReplay(object):
     def store(self, states):
         # Save a state to memory, game over = 1 otherwise 0
         self.memory.append([states])
-        # if states[2]:
-        #     fliped_s = self.inverse_last_move(states)
-        #     self.memory.append([fliped_s])
         # We don't want to store infinite memories, so if we have too many, we just delete the oldest one
         if len(self.memory) > self.max_memory:
             del self.memory[:100]
@@ -170,11 +167,12 @@ class QLearningAgent(bp.Policy):
                           on_value=True, off_value=False, axis=-1)
         return tf.boolean_mask(self.output, mask)
 
-    def init_run(self, save_path=None, l_rate=LEANING_RATE, session=None):
+    def init_run(self, save_path="/tmp/model_connect_4/", l_rate=LEANING_RATE, session=None, epsilon=0.1):
 
         self.log("Creating model...layers={}|{}|{},batch={}lr={}".format(FC1, FC2, FC3, BATCH_SIZE, l_rate))
         self.learning_rate = LEANING_RATE
         self.wins = 0
+        self.save_to = save_path
 
         self.g = tf.Graph()
         with self.g.as_default():
@@ -199,7 +197,7 @@ class QLearningAgent(bp.Policy):
 
     def cast_string_args(self, policy_args):
         # Example
-        policy_args['depth'] = int(policy_args['depth']) if 'depth' in policy_args else 1
+        policy_args['save_to'] = str(policy_args['save_to']) if 'save_to' in policy_args else 'policy_302867833.model.pkl'
         return policy_args
 
     def predict_max(self, inputs_feed, batch_size=None):
@@ -218,7 +216,7 @@ class QLearningAgent(bp.Policy):
         x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
         for batch in x_batces_generator:
             for j, sample in enumerate(batch):
-                s1, action, reward, s2 = sample.reshape(4,)
+                s1, action, reward, s2 = sample.reshape(4, )
                 if s1 is None:
                     break
                 arg_v, v = self.predict_max(s2, self.batch_size)
@@ -226,6 +224,7 @@ class QLearningAgent(bp.Policy):
                 legal_actions = np.array(np.where(s1[0, :] == EMPTY_VAL))
                 legal_actions = np.reshape(legal_actions, (legal_actions.size,))
                 if action not in legal_actions:
+                    self.log("PUNISHED FOR ACTION ={}".format(action))
                     q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
                 elif reward == 1: # win or lose the game
                     q = np.asarray([reward])
@@ -250,12 +249,15 @@ class QLearningAgent(bp.Policy):
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
         legal_actions = np.reshape(legal_actions, (legal_actions.size,))
-        self.ex_replay.store([prev_state, prev_action, reward, new_state])
+        if prev_state is not None:
+            self.ex_replay.store([prev_state, prev_action, reward, new_state])
         action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, STATE_DIM)})[0]
-        if np.random.random() < self.epsilon or action not in legal_actions:
+        if np.random.random() < self.epsilon:
             return np.random.choice(legal_actions)
-        else:
+        elif action in legal_actions:
             return action
+        else:
+            return np.random.choice(legal_actions)
 
     def load(self, path=None):
         """Load weights or init variables if path==None."""
@@ -277,20 +279,20 @@ class QLearningAgent(bp.Policy):
             self.log("Model has been loaded successfully, {},{}".format(fname, int(newest.parts[-2])))
             return int(newest.parts[-2])
 
-    def save_model(self, save_path="/tmp/model_connect_4/"):
+    def save_model(self):
         """Save the current graph."""
         if self.saver is None:
             with self.g.as_default():
                 self.saver = tf.train.Saver(max_to_keep=None)
 
-        p = Path(save_path)
+        p = Path(self.save_to)
         p.mkdir(parents=True, exist_ok=True)
 
         # fname = str(p / "moves_{}_player_{}_layers={}_{}_{}_{}_batch={}lr_{}".format(self.ex_replay.memory_len, self.id, FC1, FC2, FC3, FC4,
         #                                                                              BATCH_SIZE, self.learning_rate) / "model.ckpt")
         fname = str(p / "{}{}".format(self.id, self.ex_replay.memory_len) / "model.ckpt")
         self.saver.save(self.session, fname)
-        self.log("Model saved in file: %s" % save_path)
+        self.log("Model saved in file: %s" % self.save_to)
         self.log("moves_{}_player_{}_layers={}_{}_{}_batch={}lr_{}".format(self.ex_replay.memory_len, self.id, FC1, FC2, FC3,
                                                                            BATCH_SIZE, self.learning_rate))
 
