@@ -8,14 +8,14 @@ np.random.seed(1231)
 from policies import base_policy as bp
 
 LEANING_RATE = 1e-2
-BATCH_SIZE = 8
+BATCH_SIZE = 4
 GAMMA_FACTOR = 0.99
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6  # board size
 INPUT_SIZE = STATE_DIM
-FC1 = 64
-FC2 = 32
-FC3 = 32
+FC1 = 128
+FC2 = 64
+FC3 = 64
 # FC4 = 32
 EMPTY_VAL = 0
 PLAYER1_ID = 1
@@ -42,6 +42,9 @@ class ExperienceReplay(object):
     def store(self, states):
         # Save a state to memory, game over = 1 otherwise 0
         self.memory.append([states])
+        # if states[2]:
+        #     fliped_s = self.inverse_last_move(states)
+        #     self.memory.append([fliped_s])
         # We don't want to store infinite memories, so if we have too many, we just delete the oldest one
         if len(self.memory) > self.max_memory:
             del self.memory[:100]
@@ -108,14 +111,15 @@ class ExperienceReplay(object):
         last_move_len = len(self.memory_last_move)
         self.memory_len = len(self.memory)
 
+        # sampling batch/2 last move states
+        last_move_shuffle_indices = np.random.permutation(min(last_move_len, int(batch_size)))
+        batch_samples.append(np.asarray(self.memory_last_move)[last_move_shuffle_indices])
+
         # sampling batch/2 regular game
         shuffle_indices = np.random.permutation(min(int(batch_size), self.memory_len))
         np.random.shuffle(shuffle_indices)  # get shuffled batch
         batch_samples.append(np.asarray(self.memory)[shuffle_indices])
 
-        # sampling batch/2 last move states
-        last_move_shuffle_indices = np.random.permutation(min(last_move_len, int(batch_size)))
-        batch_samples.append(np.asarray(self.memory_last_move)[last_move_shuffle_indices])
 
         return np.asarray(batch_samples)
 
@@ -184,7 +188,7 @@ class QLearningAgent(bp.Policy):
             self.q_values = self.take(self.actions)
             self.q_estimation = tf.placeholder(tf.float32, (None,),
                                                name="q_estimation")
-            self.loss = tf.reduce_mean((self.q_estimation - self.q_values) ** 2)
+            self.loss = tf.reduce_sum(tf.square(self.q_estimation - self.q_values))
 
             self.optimizer = tf.train.AdamOptimizer(learning_rate=l_rate)
             self.train_op = self.optimizer.minimize(self.loss)
@@ -201,8 +205,10 @@ class QLearningAgent(bp.Policy):
     def predict_max(self, inputs_feed, batch_size=None):
         """Return max on NN outputs."""
         self.output_max = tf.reduce_max(self.output, axis=1)
-
-        return self.session.run(self.output_max, feed_dict={self.input: inputs_feed.reshape(-1, STATE_DIM)})
+        out_max, out_argmax = self.session.run([self.output_max, self.output_argmax],
+                                               feed_dict={self.input: inputs_feed.reshape(-1,
+                                                                                          STATE_DIM)})
+        return out_max, out_argmax
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
         self.batch_size = BATCH_SIZE
@@ -215,12 +221,14 @@ class QLearningAgent(bp.Policy):
                 s1, action, reward, s2 = sample.reshape(4,)
                 if s1 is None:
                     break
-                v = self.predict_max(s2, self.batch_size)
+                arg_v, v = self.predict_max(s2, self.batch_size)
 
                 legal_actions = np.array(np.where(s1[0, :] == EMPTY_VAL))
                 legal_actions = np.reshape(legal_actions, (legal_actions.size,))
                 if action not in legal_actions:
                     q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
+                elif reward == 1: # win or lose the game
+                    q = np.asarray([reward])
                 else:
                     q = reward + (GAMMA_FACTOR * v)
 
@@ -234,22 +242,20 @@ class QLearningAgent(bp.Policy):
 
                 # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
                 self.session.run(self.train_op, feed_dict=feed_dict)
-
+                if (round + 1) % 5000 == 0:
+                    self.epsilon = max(self.epsilon / 2, 1e-4)
                 # if round % 30 ==0 and i % 11 == 0:
                 self.log("Iteration: {}/{}, round:{}, memory size={}".format(j, self.batch_size, round, self.ex_replay.memory_len))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
         legal_actions = np.reshape(legal_actions, (legal_actions.size,))
-
         self.ex_replay.store([prev_state, prev_action, reward, new_state])
         action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, STATE_DIM)})[0]
-        if np.random.random() < self.epsilon:
+        if np.random.random() < self.epsilon or action not in legal_actions:
             return np.random.choice(legal_actions)
-        elif action in legal_actions:
-            return action
         else:
-            return np.random.choice(legal_actions)
+            return action
 
     def load(self, path=None):
         """Load weights or init variables if path==None."""
