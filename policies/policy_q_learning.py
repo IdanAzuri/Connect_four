@@ -26,6 +26,58 @@ COLS = 7
 WIN_MASK = np.ones(4)
 
 
+def check_for_win(board, player_id, col):
+    """
+    check the board to see if last move was a winning move.
+    :param board: the new board
+    :param player_id: the player who made the move
+    :param col: his action
+    :return: True iff the player won with his move
+    """
+
+    row = 0
+
+    # check which row was inserted last:
+    for i in range(ROWS):
+        if board[ROWS - 1 - i, col] == EMPTY_VAL:
+            row = ROWS - i
+            break
+
+    # check horizontal:
+    vec = board[row, :] == player_id
+    if np.any(np.convolve(WIN_MASK, vec, mode="valid") == 4):
+        return True
+
+    # check vertical:
+    vec = board[:, col] == player_id
+    if np.any(np.convolve(WIN_MASK, vec, mode="valid") == 4):
+        return True
+
+    # check diagonals:
+    vec = np.diagonal(board, col - row) == player_id
+    if np.any(np.convolve(WIN_MASK, vec, mode="valid") == 4):
+        return True
+    vec = np.diagonal(np.fliplr(board), COLS - col - 1 - row) == player_id
+    if np.any(np.convolve(WIN_MASK, vec, mode="valid") == 4):
+        return True
+
+    return False
+
+
+def make_move(board, action, player_id):
+    """
+    return a new board with after performing the given move.
+    :param board: original board
+    :param action: move to make (column)
+    :param player_id: player that made the move
+    :return: new board after move was made
+    """
+    row = np.max(np.where(board[:, action] == EMPTY_VAL))
+    new_board = np.copy(board)
+    new_board[row, action] = player_id
+
+    return new_board
+
 class ExperienceReplay(object):
     """
     During gameplay all the experiences < s, a, r, s’ > are stored in a replay memory.
@@ -135,6 +187,17 @@ def bias_variable(shape):
 
 
 class QLearningAgent(bp.Policy):
+
+    def manage_no_prev_state(self, new_state):
+
+        # make the new state to be prev state
+        prev_state = new_state
+        legal_actions = self.get_legal_moves(new_state)
+        random_move = np.random.permutation(legal_actions)[0]
+        next_state = make_move(prev_state, int(random_move), self.id)
+        reward = int(check_for_win(new_state, self.id, int(random_move)))
+        return prev_state, random_move, reward, next_state
+
     def deep_nn(self, X_input):
 
         # The model
@@ -270,8 +333,9 @@ class QLearningAgent(bp.Policy):
             else:
                 return np.random.choice(legal_actions)
         else:
-            if prev_state is not None:
-                self.ex_replay.store([prev_state, prev_action, reward, new_state])
+            if prev_state is None and np.count_nonzero(new_state) > 1:
+                prev_state, prev_action, reward, new_state = self.manage_no_prev_state(new_state)
+            self.ex_replay.store([prev_state, prev_action, reward, new_state])
             action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, STATE_DIM)})[0]
             if np.random.random() < self.epsilon:
                 return np.random.choice(legal_actions)

@@ -211,6 +211,17 @@ def deep_nn(X_input):
 
 
 class QLearningAgent2(bp.Policy):
+
+    def manage_no_prev_state(self, new_state):
+
+        # make the new state to be prev state
+        prev_state = new_state
+        legal_actions = self.get_legal_moves(new_state)
+        random_move = np.random.permutation(legal_actions)[0]
+        next_state = make_move(prev_state, random_move, self.id)
+        reward = int(check_for_win(new_state, self.id, random_move))
+        return prev_state, random_move, reward, new_state
+
     def take(self, indices):
         """Return an operation that takes values from network outputs.
         e.g. NN.predict_max() == NN.take(NN.predict_argmax())
@@ -225,7 +236,7 @@ class QLearningAgent2(bp.Policy):
         self.learning_rate = LEANING_RATE
         self.wins = 0
         self.save_to = save_path
-
+        self.epsilon = 1e-4
         self.g = tf.Graph()
         with self.g.as_default():
             self.session = tf.Session() if session is None else session
@@ -242,13 +253,6 @@ class QLearningAgent2(bp.Policy):
 
             self.optimizer = tf.train.AdamOptimizer(learning_rate=l_rate)
             self.train_op = self.optimizer.minimize(self.loss)
-
-            # y is the next Q
-            self.prediction_vec = tf.placeholder(tf.float32, [None, NUM_ACTIONS], name='predicted')
-            self.loss2 = tf.reduce_sum(tf.square(self.prediction_vec - self.output))
-
-            self.optimizer2 = tf.train.AdamOptimizer(learning_rate=l_rate)
-            self.train_op2 = self.optimizer.minimize(self.loss2)
 
             self.load(None)
 
@@ -267,53 +271,41 @@ class QLearningAgent2(bp.Policy):
                                                                                           STATE_DIM)})
         return out_max, out_argmax
 
-    def predict_vec_p(self, inputs_feed, batch_size=None):
-        """Return max on NN outputs."""
-        out_vec = self.session.run([self.output],
-                                               feed_dict={self.input: inputs_feed.reshape(-1,
-                                                                                          STATE_DIM)})
-        return out_vec
-
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
         self.batch_size = BATCH_SIZE
         self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
         # self.ex_replay.store([prev_state, prev_action, reward, new_state])
-
         x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
         for batch in x_batces_generator:
             for j, sample in enumerate(batch):
+
                 s1, action, reward, s2 = sample.reshape(4, )
                 if s1 is None:
                     break
-                arg_v, v = self.predict_max(s2, self.batch_size)
-                # will take the max arg from vec and try to win
-                reward_for_predicted_action = -1  # punishment for illegal cation
-                prediction_vec = self.predict_vec_p(s1, self.batch_size)[0]
-                action_prediction = np.argmax(prediction_vec, axis=1)
+
+                # if reward:
+                v, predicted_move = self.predict_max(s2, self.batch_size)
+                # # if predicated reward is like actual reward
+                predicted_next_state = make_move(s1, int(predicted_move), self.id) # make move on s1 with predicted move
+                is_win = check_for_win(predicted_next_state, self.id, int(predicted_move))
+                if reward > is_win: # actual move is better than pprediction, punish prediction
+                    self.log("PUNISHED FOR PREDICTION ={}".format(predicted_move))
+                    q_predicted = -1 + (GAMMA_FACTOR * v)
+                else: # TODO check if we can turn a lost to win
+                    q_predicted = int(is_win) + (GAMMA_FACTOR * v)
+
+                # learn also the prediction
+                feed_dict = {
+                    self.input: s1.reshape(-1, STATE_DIM),
+                    self.actions: predicted_move.reshape(-1, ),
+                    self.q_estimation: q_predicted.reshape(-1, )
+                }
+                # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
+                self.session.run(self.train_op, feed_dict=feed_dict)
+
+                # else:
                 legal_actions = np.array(np.where(s1[0, :] == EMPTY_VAL))
                 legal_actions = np.reshape(legal_actions, (legal_actions.size,))
-
-                # try the predicted move
-                if action_prediction not in legal_actions:
-                    self.log("PUNISHED ILLEGAL PREDICTION ={}".format(action_prediction))
-                    reward_for_predicted_action = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
-                # get new state for the action
-                else:
-                    state_after_predicted_action = make_move(s1, action_prediction, self.id)
-
-                    is_win = check_for_win(state_after_predicted_action, self.id, int(action_prediction))
-                    # if player action win and prediction didnt win - punish prediction
-                    if not is_win and reward == 1:
-                        self.log("PUNISHED BAD PREDICTION ={}".format(action_prediction))
-                        prediction_vec[0, action_prediction] = -1 + GAMMA_FACTOR * v
-                    # prediction is at least better then action
-                    elif reward == 0:
-                        self.log("REWARDED GOOD PREDICTION ={}".format(action_prediction))
-                        prediction_vec[0, action_prediction] = int(is_win) + GAMMA_FACTOR * v
-
-                self.session.run(self.output, feed_dict={self.input: s1.reshape(-1, STATE_DIM),
-                                            self.output: prediction_vec.reshape(-1, )})
-
                 if action not in legal_actions:
                     self.log("PUNISHED FOR ACTION ={}".format(action))
                     q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
@@ -338,17 +330,23 @@ class QLearningAgent2(bp.Policy):
                 self.log("Iteration: {}/{}, round:{}, memory size={}".format(j, self.batch_size, round, self.ex_replay.memory_len))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        legal_actions = np.array(np.where(new_state[0, :] == EMPTY_VAL))
-        legal_actions = np.reshape(legal_actions, (legal_actions.size,))
-        if prev_state is not None:
-            self.ex_replay.store([prev_state, prev_action, reward, new_state])
-        action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, STATE_DIM)})[0]
-        if np.random.random() < self.epsilon:
-            return np.random.choice(legal_actions)
-        elif action in legal_actions:
-            return action
+        legal_actions = self.get_legal_moves(new_state)
+        if self.mode == 'test':
+            action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, STATE_DIM)})[0]
+            if action in legal_actions:
+                return action
+            else:
+                return np.random.choice(legal_actions)
         else:
-            return np.random.choice(legal_actions)
+            if prev_state is None and np.count_nonzero(new_state) > 1:
+                prev_state, prev_action, reward, new_state = self.manage_no_prev_state(new_state)
+            # elif prev_state is not None:
+            self.ex_replay.store([prev_state, prev_action, reward, new_state])
+            action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, STATE_DIM)})[0]
+            if np.random.random() < self.epsilon:
+                return np.random.choice(legal_actions)
+            else:
+                return action
 
     def load(self, path=None):
         """Load weights or init variables if path==None."""
