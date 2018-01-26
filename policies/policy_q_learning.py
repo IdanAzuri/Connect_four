@@ -305,14 +305,7 @@ class QLearningAgent(bp.Policy):
         for batch in x_batces_generator:
             s1, action, reward, s2 = batch
             self.log("rewards={},action={}".format(reward, action))
-            if s1 is None:
-                break
             v = self.predict_max(s2, self.batch_size)
-            t1, t2 = np.split(s1, 2, axis=1)  # recovering original board
-            legal_actions = self.get_legal_moves(t1 + t2)
-            if action not in legal_actions:
-                self.log("PUNISHED FOR ACTION ={}".format(action))
-                q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
             if reward == 1:  # win or lose the game
                 q = np.asarray([reward])
                 learn_inverse_flag = True
@@ -342,14 +335,15 @@ class QLearningAgent(bp.Policy):
                 self.epsilon = max(self.epsilon / 2, 1e-4)
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
+        legal_actions = self.get_legal_moves(new_state)
         if self.mode == 'test':
-            legal_actions = self.get_legal_moves(new_state)
             action = self.session.run(self.output_argmax,
-                                      feed_dict={self.input: reshape_double_board(new_state).reshape(-1, INPUT_SIZE)})[
-                0]
+            feed_dict={self.input: reshape_double_board(new_state).reshape(-1, INPUT_SIZE)})[ 0]
             if action in legal_actions:
+                self.log("Legal action={}".format(action))
                 return action
             else:
+                self.log("NOT LEGAL action={}".format(action))
                 return np.random.choice(legal_actions)
         else:  # train
             new_state, prev_action, prev_state, reward = self.handle_and_store_input(new_state, prev_action, prev_state,
@@ -357,10 +351,12 @@ class QLearningAgent(bp.Policy):
 
             action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, INPUT_SIZE)})[0]
             if np.random.random() < self.epsilon:
-                action = np.random.choice(np.arange(start=0, stop=7))  # we want to explore illegal actions
+                action = np.random.choice(legal_actions)
                 return action
-            else:
-                return action
+            if action in legal_actions:
+                    return action
+
+            return np.random.choice(legal_actions)
 
     def handle_and_store_input(self, new_state, action, prev_state, reward):
         if prev_state is None:

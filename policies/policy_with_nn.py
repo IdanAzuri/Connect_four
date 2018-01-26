@@ -272,8 +272,8 @@ class QLearningNetwork(bp.Policy):
             # create lists to contain total rewards and steps per episode
             self.steps_list = []
             self.rewards_list = []
-            self.load("/tmp/model_connect_4/")
-            # self.load()
+            # self.load("/tmp/model_connect_4/")
+            self.load()
             self.memory_args_dict = {'session': self.session, 'x_placeholder': self.x_input, 'y_placeholder': self.y,
                                      'y_logits': self.y_logitis}
             self.ex_replay = ExperienceReplay(*self.memory_args_dict)
