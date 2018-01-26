@@ -9,11 +9,12 @@ import tensorflow as tf
 np.random.seed(1231)
 from policies import base_policy as bp
 
+
 LEANING_RATE = 1e-3
 BATCH_SIZE = 1
 GAMMA_FACTOR = 0.99
 NUM_ACTIONS = 7
-STATE_DIM = 7 * 6 *2 # board size
+STATE_DIM = 7 * 6 * 2  # board size
 INPUT_SIZE = STATE_DIM
 FC1 = 64
 FC2 = 64
@@ -202,9 +203,9 @@ class QLearningAgent(bp.Policy):
         # make the new state to be prev state
         prev_state = new_state
         legal_actions = self.get_legal_moves(new_state)
-        random_move = np.random.permutation(legal_actions)[0]
+        random_move = np.random.choice(legal_actions)
         generated_state = make_move(prev_state, int(random_move), self.id)
-        reward = int(check_for_win(generated_state, self.id, int(random_move)))
+        reward = int(check_for_win(generated_state, self.id, random_move))
 
         return prev_state, random_move, reward, generated_state
 
@@ -282,7 +283,8 @@ class QLearningAgent(bp.Policy):
 
     def cast_string_args(self, policy_args):
         # Example
-        policy_args['save_to'] = str(policy_args['save_to']) if 'save_to' in policy_args else 'policy_302867833.model.pkl'
+        policy_args['save_to'] = str(
+            policy_args['save_to']) if 'save_to' in policy_args else 'policy_302867833.model.pkl'
         return policy_args
 
     def predict_max(self, inputs_feed, batch_size=None):
@@ -301,8 +303,7 @@ class QLearningAgent(bp.Policy):
 
         x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
         for batch in x_batces_generator:
-            # for j, sample in enumerate(batch):
-            s1, action, reward, s2 = batch.reshape(4, )
+            s1, action, reward, s2 = batch
             self.log("rewards={},action={}".format(reward, action))
             if s1 is None:
                 break
@@ -324,7 +325,6 @@ class QLearningAgent(bp.Policy):
                 self.q_estimation: q.reshape(-1, )
             }
 
-
             self.log("rewards={},q={},v={},action={}".format(reward, q, v, action))
             # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
             self.session.run(self.train_op, feed_dict=feed_dict)
@@ -342,36 +342,42 @@ class QLearningAgent(bp.Policy):
                 self.epsilon = max(self.epsilon / 2, 1e-4)
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        legal_actions, new_state, prev_action, prev_state, reward = self.validate_input(new_state, prev_action, prev_state, reward)
-        new_state = reshape_double_board(new_state)
-        prev_state = reshape_double_board(prev_state)
-        action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, INPUT_SIZE)})[0]
         if self.mode == 'test':
+            legal_actions = self.get_legal_moves(new_state)
+            action = self.session.run(self.output_argmax,
+                                      feed_dict={self.input: reshape_double_board(new_state).reshape(-1, INPUT_SIZE)})[
+                0]
             if action in legal_actions:
                 return action
             else:
                 return np.random.choice(legal_actions)
-        else:
-            if prev_action is not None:
-                self.ex_replay.store([prev_state, prev_action, reward, new_state])
+        else:  # train
+            new_state, prev_action, prev_state, reward = self.handle_and_store_input(new_state, prev_action, prev_state,
+                                                                                     reward)
+
             action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, INPUT_SIZE)})[0]
             if np.random.random() < self.epsilon:
-                action =  np.random.choice(legal_actions)
-                self.log("rand action {}".format(action))
+                action = np.random.choice(np.arange(start=0, stop=7))  # we want to explore illegal actions
                 return action
             else:
                 return action
 
-    def validate_input(self, new_state, prev_action, prev_state, reward):
-        legal_actions = np.arange(start=0, stop=6)
-        if prev_state is None and np.count_nonzero(new_state) > 0:
-            prev_state, prev_action, reward, new_state = self.manage_no_prev_state(new_state)
-            legal_actions = self.get_legal_moves(new_state)
-        elif prev_state is None:
-            prev_state = np.zeros_like(new_state)
-        else:
-            legal_actions = self.get_legal_moves(new_state)
-        return legal_actions, new_state, prev_action, prev_state, reward
+    def handle_and_store_input(self, new_state, action, prev_state, reward):
+        if prev_state is None:
+            if np.count_nonzero(new_state) > 7:  # maybe there is a win -> do nothing
+                new_state = reshape_double_board(new_state)
+                return new_state, action, prev_state, reward
+            if np.count_nonzero(new_state) > 0:  # generate and learn new state
+                prev_state, action, reward, new_state = self.manage_no_prev_state(new_state)
+            else:  # np.count_nonzero(new_state)  == 0
+                prev_state = np.zeros_like(new_state)
+
+        new_state = reshape_double_board(new_state)
+        prev_state = reshape_double_board(prev_state)
+        if action is not None:
+            self.ex_replay.store([prev_state, action, reward, new_state])
+
+        return new_state, action, prev_state, reward
 
     def load(self, path=None):
         """Load weights or init variables if path==None."""
