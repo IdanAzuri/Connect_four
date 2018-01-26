@@ -11,14 +11,14 @@ from policies import base_policy as bp
 
 
 LEANING_RATE = 1e-3
-BATCH_SIZE = 1
+BATCH_SIZE = 5
 GAMMA_FACTOR = 0.99
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6 * 2  # board size
 INPUT_SIZE = STATE_DIM
 FC1 = 64
-FC2 = 64
-FC3 = 64
+FC2 = 32
+FC3 = 32
 EMPTY_VAL = 0
 
 ROWS = 6
@@ -26,12 +26,9 @@ COLS = 7
 WIN_MASK = np.ones(4)
 
 
-def inverse_last_move(states):
-    s1, action, reward, s2 = states
+def inverse_last_move(s1):
     flip_s1 = s1 * 2 % 3
-    flip_s2 = s2 * 2 % 3
-    # reward *= -1 # we want to keep the reward for blocking
-    return [flip_s1, action, reward, flip_s2]
+    return flip_s1.reshape(-1,INPUT_SIZE)
 
 
 def check_for_win(board, player_id, col):
@@ -159,6 +156,85 @@ class ExperienceReplay(object):
 
         return batch_samples
 
+class ReplayDB:
+    """Holds previous games and allows sampling random combinations of
+        (state, action, new state, reward)
+    """
+
+    def __init__(self, state_dim, db_size):
+        """Create new DB of size db_size."""
+
+        self.state_dim = state_dim
+        self.db_size = int(db_size)
+        self._empty_state = np.zeros((1, self.state_dim))
+
+        self.DB = np.rec.recarray(self.db_size, dtype=[
+            ("s1", np.float32, self.state_dim),
+            ("s2", np.float32, self.state_dim),
+            ("a", np.int32),
+            ("r", np.int32)
+        ])
+        self.clear()
+
+    def clear(self):
+        """Remove all entries from the DB."""
+
+        self.index = 0
+        self.n_items = 0
+        self.full = False
+
+    def store(self, s1, s2, a, r):
+        """Store new samples in the DB."""
+
+        n = s1.shape[0]
+        if self.index + n > self.db_size:
+            self.full = True
+            l = self.db_size - self.index
+            if l > 0:
+                self.store(s1[:l], s2[:l], a[:l], r[:l])
+            self.index = 0
+            if l < n:
+                self.store(s1[l:], s2[l:], a[l:], r[l:])
+        else:
+            v = self.DB[self.index : self.index + n]
+            v.s1 = s1
+            v.s2 = s2
+            v.a = a
+            v.r = r
+            self.index += n
+
+        self.n_items = min(self.n_items + n, self.db_size)
+
+    def sample(self, sample_size=None):
+        """Get a random sample from the DB."""
+
+        if self.full:
+            db = self.DB
+        else:
+            db = self.DB[:self.index]
+
+        if (sample_size is None) or (sample_size > self.n_items):
+            return db
+        else:
+            return np.rec.array(np.random.choice(db, sample_size, False))
+
+    def iter_samples(self, sample_size, n_samples):
+        """Iterate over random samples from the DB."""
+
+        if sample_size == 0:
+            sample_size = self.n_items
+
+        ind = self.n_items
+        for i in range(n_samples):
+            end = ind + sample_size
+            if end > self.n_items:
+                ind = 0
+                end = sample_size
+                p = np.random.permutation(self.n_items)
+                db = np.rec.array(self.DB[p])
+            yield db[ind : end]
+            ind = end
+
 
 # Helper functions
 def weight_variable(shape, name):
@@ -178,7 +254,7 @@ def reshape_double_board(state):
     b_2 = state - b_1
     new_board = np.concatenate([b_1, b_2], axis=1)
 
-    return new_board
+    return new_board.reshape(-1,84)
 
 
 class QLearningAgent(bp.Policy):
@@ -243,6 +319,7 @@ class QLearningAgent(bp.Policy):
         self.model_folder = folder
         self.load_from = "models/" + self.save_to  # not sure about that
         self.epsilon = epsilon
+        self.db = ReplayDB(INPUT_SIZE, 1e7)
         self.g = tf.Graph()
         with self.g.as_default():
             self.saver = None
@@ -263,7 +340,6 @@ class QLearningAgent(bp.Policy):
             self.session.run(tf.global_variables_initializer())
             # self.load(None)
 
-            self.ex_replay = ExperienceReplay()
 
     def cast_string_args(self, policy_args):
         # Example
@@ -274,54 +350,56 @@ class QLearningAgent(bp.Policy):
     def predict_max(self, inputs_feed, batch_size=None):
         """Return max on NN outputs."""
         self.output_max = tf.reduce_max(self.output, axis=1)
-        out_max = self.session.run(self.output_max, feed_dict={self.input: inputs_feed.reshape(-1, INPUT_SIZE)})
+        out_max = self.session.run(self.output_max, feed_dict={self.input: inputs_feed})
         return out_max
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        learn_inverse_flag = False
         if prev_state is not None and new_state is not None:
             new_state = reshape_double_board(new_state)
             prev_state = reshape_double_board(prev_state)
             # self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
-            self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
+            self.db.store(prev_state, new_state, prev_action, reward)
 
-        x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
+        # x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
+        x_batces_generator =  self.db.iter_samples(BATCH_SIZE,min(self.db.n_items, self.batch_size))
         for batch in x_batces_generator:
-            s1, action, reward, s2 = batch
-            self.log("rewards={},action={}".format(reward, action))
-            v = self.predict_max(s2, self.batch_size)
-            q = reward + (GAMMA_FACTOR * v)
-            if reward == 1:  # win or lose the game
-                learn_inverse_flag = True
+            v = self.predict_max(batch.s2, self.batch_size)
+            q = batch.r + (GAMMA_FACTOR * v)
+
+
 
 
             feed_dict = {
-                self.input: s1.reshape(-1, INPUT_SIZE),
-                self.actions: action.reshape(-1, ),
-                self.q_estimation: q.reshape(-1, )
+                self.input: batch.s1,
+                self.actions: batch.a,
+                self.q_estimation: q
             }
 
-            self.log("rewards={},q={},v={},action={}".format(reward, q, v, action))
+            self.log("rewards={},q={},v={},action={}".format(batch.r, q, v, batch.a))
             # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
             self.session.run(self.train_op, feed_dict=feed_dict)
-            if learn_inverse_flag:
-                flip_s1, action, reward, flip_s2 = inverse_last_move([s1, action, reward, s2])
+
+            is_win_flag = np.argwhere(batch.r == 1)
+            won_batch = batch[is_win_flag]
+            if len(won_batch) > 0:
+                flip_s1 = inverse_last_move(won_batch.s1)
                 feed_dict = {
-                    self.input: flip_s1.reshape(-1, INPUT_SIZE),
-                    self.actions: action.reshape(-1, ),
-                    self.q_estimation: q.reshape(-1, )
+                    self.input: flip_s1,
+                    self.actions: won_batch.a,
+                    self.q_estimation: q[is_win_flag]
                 }
-                "flip"
                 self.session.run(self.train_op, feed_dict=feed_dict)
-                learn_inverse_flag = False
-            if (round + 1) % 200 == 0:
+                self.log("FLIPED rewards={},q={},v={},action={}".format(batch.r, q, v, batch.a))
+
+
+        if (round + 1) % 200 == 0:
                 self.epsilon = max(self.epsilon / 2, 1e-4)
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         legal_actions = self.get_legal_moves(new_state)
         if self.mode == 'test':
             action = self.session.run(self.output_argmax,
-            feed_dict={self.input: reshape_double_board(new_state).reshape(-1, INPUT_SIZE)})[ 0]
+            feed_dict={self.input: reshape_double_board(new_state)})[ 0]
             if action in legal_actions:
                 self.log("Legal action={}".format(action))
                 return action
@@ -332,7 +410,7 @@ class QLearningAgent(bp.Policy):
             new_state, prev_action, prev_state, reward = self.handle_and_store_input(new_state, prev_action, prev_state,
                                                                                      reward)
 
-            action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, INPUT_SIZE)})[0]
+            action = self.session.run(self.output_argmax, feed_dict={self.input: new_state})[0]
             if np.random.random() < self.epsilon:
                 action = np.random.choice(legal_actions)
                 return action
@@ -354,7 +432,8 @@ class QLearningAgent(bp.Policy):
         new_state = reshape_double_board(new_state)
         prev_state = reshape_double_board(prev_state)
         if action is not None:
-            self.ex_replay.store([prev_state, action, reward, new_state])
+            # self.ex_replay.store([prev_state, action, reward, new_state])
+            self.db.store(prev_state, new_state, action, reward)
 
         return new_state, action, prev_state, reward
 
@@ -378,19 +457,6 @@ class QLearningAgent(bp.Policy):
             self.log("Model has been loaded successfully, {},{}".format(fname, int(newest.parts[-2])))
             return int(newest.parts[-2])
 
-    def save_model_old(self):
-        """Save the current graph."""
-        if self.saver is None:
-            with self.g.as_default():
-                self.saver = tf.train.Saver(max_to_keep=None)
-
-        p = Path(self.save_to)
-        p.mkdir(parents=True, exist_ok=True)
-        fname = str(p / "{}{}".format(self.id, self.ex_replay.memory_len) / "model.ckpt")
-        self.saver.save(self.session, fname)
-        self.log("Model saved in file: %s" % self.save_to)
-
-        return
 
     def save_model(self):
         return [self.session.run(self.W1), self.session.run(self.B1),
