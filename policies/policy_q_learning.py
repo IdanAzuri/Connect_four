@@ -10,14 +10,14 @@ np.random.seed(1231)
 from policies import base_policy as bp
 
 LEANING_RATE = 1e-2
-BATCH_SIZE = 2
-GAMMA_FACTOR = 0.97
+BATCH_SIZE = 1
+GAMMA_FACTOR = 0.99
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6 *2 # board size
 INPUT_SIZE = STATE_DIM
-FC1 = 32
-FC2 = 32
-FC3 = 32
+FC1 = 64
+FC2 = 64
+FC3 = 64
 EMPTY_VAL = 0
 
 ROWS = 6
@@ -333,6 +333,7 @@ class QLearningAgent(bp.Policy):
                     self.actions: action.reshape(-1, ),
                     self.q_estimation: q.reshape(-1, )
                 }
+                "flip"
                 self.session.run(self.train_op, feed_dict=feed_dict)
                 learn_inverse_flag = False
             if (round + 1) % 200 == 0:

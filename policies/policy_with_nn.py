@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 
-LEANING_RATE = 1e-2
+LEANING_RATE = 1e-3
 
 BATCH_SIZE = 16
 
