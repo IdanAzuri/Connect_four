@@ -367,7 +367,7 @@ class QLearningAgent(bp.Policy):
         x_batces_generator =  self.db.iter_samples(min(self.db.n_items, self.batch_size), N_SAMPLES)
         for batch in x_batces_generator:
             v = self.predict_max(batch.s2, self.batch_size)
-            mask_game_not_over = np.where(batch.r < 1,1,0)
+            mask_game_not_over = np.where(np.abs(batch.r) < 1,1,0)
 
             q = batch.r + (mask_game_not_over*GAMMA_FACTOR * v)
 
@@ -390,7 +390,7 @@ class QLearningAgent(bp.Policy):
                     self.q_estimation: q[is_win_flag].reshape(-1,)
                 }
                 self.session.run(self.train_op, feed_dict=feed_dict)
-            self.log("round={}|rewards={},q={},v={},action={}".format(round, batch.r, q, v, batch.a))
+
             if (round + 1) % 200 == 0:
                 self.epsilon = max(self.epsilon / 2, 1e-3)
                 self.log("round={}|rewards={},q={},v={},action={}".format(round, batch.r, q, v, batch.a))
