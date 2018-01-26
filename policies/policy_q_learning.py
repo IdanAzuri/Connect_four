@@ -9,18 +9,17 @@ import tensorflow as tf
 np.random.seed(1231)
 from policies import base_policy as bp
 
-LEANING_RATE = 5e-3
+LEANING_RATE = 1e-2
 BATCH_SIZE = 4
-GAMMA_FACTOR = 0.9
+GAMMA_FACTOR = 0.97
 NUM_ACTIONS = 7
-STATE_DIM = 7 * 6 * 2  # board size
+STATE_DIM = 7 * 6 *2 # board size
 INPUT_SIZE = STATE_DIM
-FC1 = 64
+FC1 = 32
 FC2 = 32
 FC3 = 32
 EMPTY_VAL = 0
-PLAYER1_ID = 1
-PLAYER2_ID = 2
+
 ROWS = 6
 COLS = 7
 WIN_MASK = np.ones(4)
@@ -193,6 +192,7 @@ def reshape_double_board(state):
     b_1 = state % 2
     b_2 = state - b_1
     new_board = np.concatenate([b_1, b_2], axis=1)
+
     return new_board
 
 
@@ -296,49 +296,48 @@ class QLearningAgent(bp.Policy):
         if prev_state is not None and new_state is not None:
             new_state = reshape_double_board(new_state)
             prev_state = reshape_double_board(prev_state)
-            self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
-            # self.ex_replay.store([prev_state, prev_action, reward, new_state])
+            # self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
+            self.ex_replay.store([prev_state, prev_action, reward, new_state])
 
-        x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
-        for batch in x_batces_generator:
-            for j, sample in enumerate(batch):
-                s1, action, reward, s2 = sample.reshape(4, )
-                if s1 is None:
-                    break
-                v = self.predict_max(s2, self.batch_size)
-                # t1, t2 = np.split(s1, 2, axis=1)  # recovering original board
-                # legal_actions = self.get_legal_moves(t1 + t2)
-                # if action not in legal_actions:
-                #     self.log("PUNISHED FOR ACTION ={}".format(action))
-                #     q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
-                if reward == 1:  # win or lose the game
-                    q = np.asarray([reward])
-                    learn_inverse_flag = True
-                else:
-                    q = reward + (GAMMA_FACTOR * v)
+        x_batces_generator = self.ex_replay.get_batch(batch_size=self.batch_size)
+        # for batch in x_batces_generator:
+        for j, sample in enumerate(x_batces_generator):
+            s1, action, reward, s2 = sample.reshape(4, )
+            if s1 is None:
+                break
+            v = self.predict_max(s2, self.batch_size)
+            # t1, t2 = np.split(s1, 2, axis=1)  # recovering original board
+            # legal_actions = self.get_legal_moves(t1 + t2)
+            # if action not in legal_actions:
+            #     self.log("PUNISHED FOR ACTION ={}".format(action))
+            #     q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
+            if reward == 1:  # win or lose the game
+                q = np.asarray([reward])
+                learn_inverse_flag = True
+            else:
+                q = reward + (GAMMA_FACTOR * v)
 
+            feed_dict = {
+                self.input: s1.reshape(-1, INPUT_SIZE),
+                self.actions: action.reshape(-1, ),
+                self.q_estimation: q.reshape(-1, )
+            }
+
+
+            # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
+            self.session.run(self.train_op, feed_dict=feed_dict)
+            if learn_inverse_flag:
+                flip_s1, action, reward, flip_s2 = inverse_last_move([s1, action, reward, s2])
                 feed_dict = {
-                    self.input: s1.reshape(-1, INPUT_SIZE),
+                    self.input: flip_s1.reshape(-1, INPUT_SIZE),
                     self.actions: action.reshape(-1, ),
                     self.q_estimation: q.reshape(-1, )
                 }
-
-                # self.log("rewards={},q={},v={},actions={}".format(reward, q, v, action))
-
-                # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
                 self.session.run(self.train_op, feed_dict=feed_dict)
-                if learn_inverse_flag:
-                    # s1, action, reward, s2
-                    flip_s1, action, reward, flip_s2 = inverse_last_move([s1, action, reward, s2])
-                    feed_dict = {
-                        self.input: flip_s1.reshape(-1, INPUT_SIZE),
-                        self.actions: action.reshape(-1, ),
-                        self.q_estimation: q.reshape(-1, )
-                    }
-                    self.session.run(self.train_op, feed_dict=feed_dict)
-                    learn_inverse_flag = False
-                if (round + 1) % 200 == 0:
-                    self.epsilon = max(self.epsilon / 2, 1e-4)
+                learn_inverse_flag = False
+            if (round + 1) % 200 == 0:
+                self.epsilon = max(self.epsilon / 2, 1e-4)
+                self.log("rewards={},q={},v={},action={}".format(reward, q, v, action))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         legal_actions, new_state, prev_action, prev_state, reward = self.validate_input(new_state, prev_action, prev_state, reward)
