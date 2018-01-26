@@ -10,7 +10,7 @@ np.random.seed(1231)
 from policies import base_policy as bp
 
 LEANING_RATE = 1e-2
-BATCH_SIZE = 4
+BATCH_SIZE = 2
 GAMMA_FACTOR = 0.97
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6 *2 # board size
@@ -364,6 +364,8 @@ class QLearningAgent(bp.Policy):
             legal_actions = self.get_legal_moves(new_state)
         elif prev_state is None:
             prev_state = np.zeros_like(new_state)
+        else:
+            legal_actions = self.get_legal_moves(new_state)
         return legal_actions, new_state, prev_action, prev_state, reward
 
     def load(self, path=None):
