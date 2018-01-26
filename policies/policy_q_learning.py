@@ -133,25 +133,9 @@ class ExperienceReplay(object):
         return state_t, action_t, reward_t, state_tp1
         """
         self.memory_len = len(self.memory)
-        shuffle_indices = np.random.permutation(min(self.memory_len, batch_size, int(batch_size)))
+        shuffle_indices = np.random.permutation(self.memory_len)[batch_size]
         return np.asarray(self.memory)[shuffle_indices]
 
-    def get_last_move_batch(self, batch_size=32):
-        """
-        Here we load one transition <s, a, r, s’> from memory
-
-        :param batch_size:
-
-        :return: a permutation of:
-        state_t: prev state s
-        action_t: action taken a
-        reward_t: reward earned r
-        state_tp1: the state that followed s’
-        return state_t, action_t, reward_t, state_tp1
-        """
-        last_move_len = len(self.memory_last_move)
-        last_move_shuffle_indices = np.random.permutation(min(last_move_len, int(batch_size)))
-        return np.asarray(self.memory_last_move)[last_move_shuffle_indices]
 
     def get_balanced_batch(self, batch_size=32):
         """
@@ -170,8 +154,8 @@ class ExperienceReplay(object):
 
         # sampling batch/2 regular game
 
-        shuffle_indices = np.random.permutation(self.memory_len)[0]
-        batch_samples.append(np.asarray(self.memory)[shuffle_indices])
+        shuffle_indices = np.random.permutation(self.memory_len)[:1]
+        batch_samples.extend(np.asarray(self.memory)[shuffle_indices])
 
         return batch_samples
 
@@ -306,11 +290,10 @@ class QLearningAgent(bp.Policy):
             s1, action, reward, s2 = batch
             self.log("rewards={},action={}".format(reward, action))
             v = self.predict_max(s2, self.batch_size)
+            q = reward + (GAMMA_FACTOR * v)
             if reward == 1:  # win or lose the game
-                q = np.asarray([reward])
                 learn_inverse_flag = True
-            else:
-                q = reward + (GAMMA_FACTOR * v)
+
 
             feed_dict = {
                 self.input: s1.reshape(-1, INPUT_SIZE),
