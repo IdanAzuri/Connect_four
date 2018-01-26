@@ -368,16 +368,16 @@ class QLearningAgent(bp.Policy):
 
 
 
+            self.log("rewards={},q={},v={},action={}".format(batch.r, q, v, batch.a))
 
+            # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
             feed_dict = {
                 self.input: batch.s1,
                 self.actions: batch.a,
                 self.q_estimation: q
             }
-
-            self.log("rewards={},q={},v={},action={}".format(batch.r, q, v, batch.a))
-            # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
             self.session.run(self.train_op, feed_dict=feed_dict)
+
 
             is_win_flag = np.argwhere(batch.r == 1)
             won_batch = batch[is_win_flag]
@@ -385,8 +385,8 @@ class QLearningAgent(bp.Policy):
                 flip_s1 = inverse_last_move(won_batch.s1)
                 feed_dict = {
                     self.input: flip_s1,
-                    self.actions: won_batch.a,
-                    self.q_estimation: q[is_win_flag]
+                    self.actions: won_batch.a.reshape(-1,),
+                    self.q_estimation: q[is_win_flag].reshape(-1,)
                 }
                 self.session.run(self.train_op, feed_dict=feed_dict)
                 self.log("FLIPED rewards={},q={},v={},action={}".format(batch.r, q, v, batch.a))
