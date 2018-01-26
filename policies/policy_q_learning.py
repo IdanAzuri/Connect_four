@@ -13,7 +13,7 @@ from policies import base_policy as bp
 
 
 LEANING_RATE = 1e-3
-BATCH_SIZE = 16
+BATCH_SIZE = 32
 GAMMA_FACTOR = 0.99
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6 * 2  # board size
@@ -361,16 +361,13 @@ class QLearningAgent(bp.Policy):
             prev_state = reshape_double_board(prev_state)
             # self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
             self.db.store(prev_state, new_state, prev_action, reward)
+            self.db.store(prev_state, new_state, prev_action, reward) # saving twice end of the game
 
         # x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
         x_batces_generator =  self.db.iter_samples(min(self.db.n_items, self.batch_size), N_SAMPLES)
         for batch in x_batces_generator:
             v = self.predict_max(batch.s2, self.batch_size)
             q = batch.r + (GAMMA_FACTOR * v)
-
-
-
-            self.log("rewards={},q={},v={},action={}".format(batch.r, q, v, batch.a))
 
             # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
             feed_dict = {
@@ -380,7 +377,7 @@ class QLearningAgent(bp.Policy):
             }
             self.session.run(self.train_op, feed_dict=feed_dict)
 
-
+            # Learn the model how to block the opponent
             is_win_flag = np.argwhere(batch.r == 1)
             won_batch = batch[is_win_flag]
             if len(won_batch) > 0:
@@ -391,11 +388,10 @@ class QLearningAgent(bp.Policy):
                     self.q_estimation: q[is_win_flag].reshape(-1,)
                 }
                 self.session.run(self.train_op, feed_dict=feed_dict)
-                self.log("FLIPED rewards={},q={},v={},action={}".format(batch.r, q, v, batch.a))
 
-
-        if (round + 1) % 200 == 0:
-                self.epsilon = max(self.epsilon / N_SAMPLES, 1e-4)
+            if (round + 1) % 200 == 0:
+                self.epsilon = max(self.epsilon / 2, 1e-3)
+                self.log("round={}|rewards={},q={},v={},action={}".format(round, batch.r, q, v, batch.a))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         legal_actions = self.get_legal_moves(new_state)
@@ -423,7 +419,7 @@ class QLearningAgent(bp.Policy):
 
     def handle_and_store_input(self, new_state, action, prev_state, reward):
         if prev_state is None:
-            if np.count_nonzero(new_state) > 7:  # maybe there is a win -> do nothing
+            if np.count_nonzero(new_state) > 7:  # maybe there is a win -> dont save
                 new_state = reshape_double_board(new_state)
                 return new_state, action, prev_state, reward
             if np.count_nonzero(new_state) > 0:  # generate and learn new state

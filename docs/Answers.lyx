@@ -273,7 +273,7 @@ Board representation
 
 \begin_layout Standard
 We chose to represent the board as a vector in dimension 
-\begin_inset Formula $7\times12$
+\begin_inset Formula $1\times84$
 \end_inset
 
 .
@@ -282,7 +282,9 @@ We chose to represent the board as a vector in dimension
 \begin_inset Formula $6\times7$
 \end_inset
 
- each board contains only one player pieces.
+ each board contains only one player pieces and finally we flattened it.
+ The main reason we chose this board representation is because it should
+ help the model to separate between each player's pieces on the board.
  Another parameter that we considered is the minimal divergence rate is
  also possible for all games, but unlike with smoothness is actually practical
  for a reasonable number of games.
@@ -771,12 +773,12 @@ We checked our agent performance against the three main policies he will
  The RandomAgent and MinmaxAgent with depth 1 and 2.
  We checked every time 1000 rounds.
  We saw that against the Random it was a very easy game and we won in the
- beginning 65% and our wining rate went up to 90%.
- Against the Minmax depth=1 the game started with a winning rate of 45%
+ beginning 70-80% and our wining rate went up to 90%.
+ Against the Minmax depth=1 the game started with a winning rate of 45-55%
  and our wining rate went up till the end of the 1000 rounds to 65% Against
- the Minimax depth=2 we started with a winning rate of 7% and got at our
+ the Minmax depth=2 we started with a winning rate of 7% and got at our
  best to 45% wining rate.
- All performance checks were with uninitialized weights.
+ All performance checks after we trained the model against itself.
 \end_layout
 
 \begin_layout Subsubsection*
