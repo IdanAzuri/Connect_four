@@ -367,7 +367,9 @@ class QLearningAgent(bp.Policy):
         x_batces_generator =  self.db.iter_samples(min(self.db.n_items, self.batch_size), N_SAMPLES)
         for batch in x_batces_generator:
             v = self.predict_max(batch.s2, self.batch_size)
-            q = batch.r + (GAMMA_FACTOR * v)
+            mask_game_not_over = np.where(batch.r < 1,1,0)
+
+            q = batch.r + (mask_game_not_over*GAMMA_FACTOR * v)
 
             # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
             feed_dict = {
@@ -378,7 +380,7 @@ class QLearningAgent(bp.Policy):
             self.session.run(self.train_op, feed_dict=feed_dict)
 
             # Learn the model how to block the opponent
-            is_win_flag = np.argwhere(batch.r == 1)
+            is_win_flag = np.argwhere(batch.r == 0)
             won_batch = batch[is_win_flag]
             if len(won_batch) > 0:
                 flip_s1 = inverse_last_move(won_batch.s1)
@@ -388,7 +390,7 @@ class QLearningAgent(bp.Policy):
                     self.q_estimation: q[is_win_flag].reshape(-1,)
                 }
                 self.session.run(self.train_op, feed_dict=feed_dict)
-
+            self.log("round={}|rewards={},q={},v={},action={}".format(round, batch.r, q, v, batch.a))
             if (round + 1) % 200 == 0:
                 self.epsilon = max(self.epsilon / 2, 1e-3)
                 self.log("round={}|rewards={},q={},v={},action={}".format(round, batch.r, q, v, batch.a))
