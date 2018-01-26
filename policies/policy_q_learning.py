@@ -6,12 +6,14 @@ import numpy as np
 import tensorflow as tf
 
 
+N_SAMPLES = 2
+
 np.random.seed(1231)
 from policies import base_policy as bp
 
 
 LEANING_RATE = 1e-3
-BATCH_SIZE = 5
+BATCH_SIZE = 16
 GAMMA_FACTOR = 0.99
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6 * 2  # board size
@@ -361,7 +363,7 @@ class QLearningAgent(bp.Policy):
             self.db.store(prev_state, new_state, prev_action, reward)
 
         # x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
-        x_batces_generator =  self.db.iter_samples(BATCH_SIZE,min(self.db.n_items, self.batch_size))
+        x_batces_generator =  self.db.iter_samples(min(self.db.n_items, self.batch_size), N_SAMPLES)
         for batch in x_batces_generator:
             v = self.predict_max(batch.s2, self.batch_size)
             q = batch.r + (GAMMA_FACTOR * v)
@@ -393,7 +395,7 @@ class QLearningAgent(bp.Policy):
 
 
         if (round + 1) % 200 == 0:
-                self.epsilon = max(self.epsilon / 2, 1e-4)
+                self.epsilon = max(self.epsilon / N_SAMPLES, 1e-4)
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         legal_actions = self.get_legal_moves(new_state)
