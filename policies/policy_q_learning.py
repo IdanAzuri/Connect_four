@@ -9,7 +9,7 @@ import tensorflow as tf
 np.random.seed(1231)
 from policies import base_policy as bp
 
-LEANING_RATE = 1e-2
+LEANING_RATE = 1e-3
 BATCH_SIZE = 1
 GAMMA_FACTOR = 0.99
 NUM_ACTIONS = 7
@@ -29,7 +29,7 @@ def inverse_last_move(states):
     s1, action, reward, s2 = states
     flip_s1 = s1 * 2 % 3
     flip_s2 = s2 * 2 % 3
-    reward *= -1
+    # reward *= -1 # we want to keep the reward for blocking
     return [flip_s1, action, reward, flip_s2]
 
 
@@ -102,7 +102,7 @@ class ExperienceReplay(object):
 
     def store(self, states):
         # Save a state to memory, game over = 1 otherwise 0
-        self.memory.append([states])
+        self.memory.append(states)
         # We don't want to store infinite memories, so if we have too many, we just delete the oldest one
         if len(self.memory) > self.max_memory:
             del self.memory[:100]
@@ -113,7 +113,7 @@ class ExperienceReplay(object):
         # TODO - need to decide if to implement
         # flip_states = inverse_last_move(states)
         # self.memory_last_move.append([flip_states])
-        self.memory_last_move.append([states])
+        self.memory_last_move.append(states)
         # We don't want to store infinite memories, so if we have too many, we just delete the oldest one
         if len(self.memory_last_move) > self.max_memory:
             del self.memory_last_move[:100]
@@ -158,18 +158,18 @@ class ExperienceReplay(object):
         :param batch_size:
         :return: 2 batches
         """
-        batch_size /= 4  # divding batch size equally
+        # batch_size /= 4  # divding batch size equally
         batch_samples = []
         last_move_len = len(self.memory_last_move)
         self.memory_len = len(self.memory)
 
         # sampling batch/2 last move states
-        last_move_shuffle_indices = np.random.permutation(min(last_move_len, int(batch_size)))
+        last_move_shuffle_indices = np.random.permutation(last_move_len)[0]
         batch_samples.append(np.asarray(self.memory_last_move)[last_move_shuffle_indices])
 
         # sampling batch/2 regular game
-        shuffle_indices = np.random.permutation(min(int(batch_size*3), self.memory_len))
-        np.random.shuffle(shuffle_indices)  # get shuffled batch
+
+        shuffle_indices = np.random.permutation(self.memory_len)[0]
         batch_samples.append(np.asarray(self.memory)[shuffle_indices])
 
         return batch_samples
@@ -214,7 +214,7 @@ class QLearningAgent(bp.Policy):
         X_input = tf.reshape(X_input, [-1, INPUT_SIZE])
         Y1 = tf.nn.relu(tf.matmul(X_input, self.W1) + self.B1)
         Y2 = tf.nn.relu(tf.matmul(Y1, self.W2) + self.B2)
-        Y3 = tf.nn.sigmoid(tf.matmul(Y2, self.W3) + self.B3)
+        Y3 = tf.nn.tanh(tf.matmul(Y2, self.W3) + self.B3)
         Y_logitis = tf.matmul(Y3, self.W_LAST_LAYER) + self.B_LAST_LAYER
         predict = tf.argmax(Y_logitis, 1)
 
@@ -250,7 +250,7 @@ class QLearningAgent(bp.Policy):
         return tf.boolean_mask(self.output, mask)
 
     def init_run(self, save_path="policy_302867833.model.pkl", folder="/tmp/model_connect_4/", l_rate=LEANING_RATE,
-                 session=None, epsilon=0.1):
+                 session=None, epsilon=0.2):
         self.log("Creating model...layers={}|{}|{},batch={}lr={}".format(FC1, FC2, FC3, BATCH_SIZE, l_rate))
         self.learning_rate = LEANING_RATE
         self.batch_size = BATCH_SIZE
@@ -297,20 +297,21 @@ class QLearningAgent(bp.Policy):
             new_state = reshape_double_board(new_state)
             prev_state = reshape_double_board(prev_state)
             # self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
-            self.ex_replay.store([prev_state, prev_action, reward, new_state])
+            self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
 
-        x_batces_generator = self.ex_replay.get_batch(batch_size=self.batch_size)
-        # for batch in x_batces_generator:
-        for j, sample in enumerate(x_batces_generator):
-            s1, action, reward, s2 = sample.reshape(4, )
+        x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
+        for batch in x_batces_generator:
+            # for j, sample in enumerate(batch):
+            s1, action, reward, s2 = batch.reshape(4, )
+            self.log("rewards={},action={}".format(reward, action))
             if s1 is None:
                 break
             v = self.predict_max(s2, self.batch_size)
-            # t1, t2 = np.split(s1, 2, axis=1)  # recovering original board
-            # legal_actions = self.get_legal_moves(t1 + t2)
-            # if action not in legal_actions:
-            #     self.log("PUNISHED FOR ACTION ={}".format(action))
-            #     q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
+            t1, t2 = np.split(s1, 2, axis=1)  # recovering original board
+            legal_actions = self.get_legal_moves(t1 + t2)
+            if action not in legal_actions:
+                self.log("PUNISHED FOR ACTION ={}".format(action))
+                q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
             if reward == 1:  # win or lose the game
                 q = np.asarray([reward])
                 learn_inverse_flag = True
@@ -324,6 +325,7 @@ class QLearningAgent(bp.Policy):
             }
 
 
+            self.log("rewards={},q={},v={},action={}".format(reward, q, v, action))
             # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
             self.session.run(self.train_op, feed_dict=feed_dict)
             if learn_inverse_flag:
@@ -338,7 +340,6 @@ class QLearningAgent(bp.Policy):
                 learn_inverse_flag = False
             if (round + 1) % 200 == 0:
                 self.epsilon = max(self.epsilon / 2, 1e-4)
-                self.log("rewards={},q={},v={},action={}".format(reward, q, v, action))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         legal_actions, new_state, prev_action, prev_state, reward = self.validate_input(new_state, prev_action, prev_state, reward)
@@ -351,10 +352,13 @@ class QLearningAgent(bp.Policy):
             else:
                 return np.random.choice(legal_actions)
         else:
-            self.ex_replay.store([prev_state, prev_action, reward, new_state])
+            if prev_action is not None:
+                self.ex_replay.store([prev_state, prev_action, reward, new_state])
             action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, INPUT_SIZE)})[0]
             if np.random.random() < self.epsilon:
-                return np.random.choice(legal_actions)
+                action =  np.random.choice(legal_actions)
+                self.log("rand action {}".format(action))
+                return action
             else:
                 return action
 
