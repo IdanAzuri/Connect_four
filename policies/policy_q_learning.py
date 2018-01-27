@@ -6,14 +6,14 @@ import numpy as np
 import tensorflow as tf
 
 
-N_SAMPLES = 2
+N_SAMPLES = 1
+BATCH_SIZE = 8
 
 np.random.seed(1231)
 from policies import base_policy as bp
 
 
-LEANING_RATE = 1e-3
-BATCH_SIZE = 32
+LEANING_RATE = 1e-2
 GAMMA_FACTOR = 0.99
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6 * 2  # board size
@@ -294,6 +294,7 @@ class QLearningAgent(bp.Policy):
             self.B3 = tf.Variable(tf.constant(model[5]))
             self.W_LAST_LAYER = tf.Variable(tf.constant(model[6]))
             self.B_LAST_LAYER = tf.Variable(tf.constant(model[7]))
+            self.log("Model has been load sucessfully!")
         except:
             self.W1 = weight_variable([INPUT_SIZE, FC1], name="W1")
             self.B1 = bias_variable([FC1])
@@ -393,7 +394,8 @@ class QLearningAgent(bp.Policy):
 
             if (round + 1) % 200 == 0:
                 self.epsilon = max(self.epsilon / 2, 1e-3)
-                self.log("round={}|rewards={},q={},v={},action={}".format(round, batch.r, q, v, batch.a))
+                self.log("round={}|memory={}|rewards={}|q={}|v={}|action={}".format(round, batch.r, q, v, batch.a,
+                                                                          self.db.n_items))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         legal_actions = self.get_legal_moves(new_state)
