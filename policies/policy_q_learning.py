@@ -385,12 +385,16 @@ class QLearningAgent(bp.Policy):
             won_batch = batch[is_win_flag]
             if len(won_batch) > 0:
                 flip_s1 = inverse_last_move(won_batch.s1)
-                feed_dict = {
-                    self.input: flip_s1,
-                    self.actions: won_batch.a.reshape(-1,),
-                    self.q_estimation: q[is_win_flag].reshape(-1,)
-                }
-                self.session.run(self.train_op, feed_dict=feed_dict)
+                flip_s2 = inverse_last_move(won_batch.s2)
+                self.db.store(flip_s1,flip_s2,won_batch.a.reshape(-1,), won_batch.r.reshape(-1,)) # a change should
+                # be check to reduce timeouts
+
+                # feed_dict = {
+                #     self.input: flip_s1,
+                #     self.actions: won_batch.a.reshape(-1,),
+                #     self.q_estimation: q[is_win_flag].reshape(-1,)
+                # }
+                # self.session.run(self.train_op, feed_dict=feed_dict)
 
             if (round + 1) % 200 == 0:
                 self.epsilon = max(self.epsilon / 2, 1e-3)
