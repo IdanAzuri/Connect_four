@@ -322,7 +322,7 @@ class QLearningAgent(bp.Policy):
         self.model_folder = folder
         self.load_from = "models/" + self.save_to  # not sure about that
         self.epsilon = epsilon
-        self.db = ReplayDB(INPUT_SIZE, 1e7)
+        self.db = ReplayDB(INPUT_SIZE, 1e6)
         self.g = tf.Graph()
         with self.g.as_default():
             self.saver = None
@@ -394,7 +394,7 @@ class QLearningAgent(bp.Policy):
 
             if (round + 1) % 200 == 0:
                 self.epsilon = max(self.epsilon / 2, 1e-3)
-                self.log("round={}|memory={}|rewards={}|q={}|v={}|action={}".format(round, batch.r, q, v, batch.a,
+                self.log("round={}|rewards={}|q={}|v={}|action={}|memory={}|".format(round, batch.r, q, v, batch.a,
                                                                           self.db.n_items))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
