@@ -259,7 +259,7 @@ def reshape_double_board(state):
     return new_board.reshape(-1,84)
 
 
-class QLearningAgent(bp.Policy):
+class QLearningAgentI(bp.Policy):
 
     def manage_no_prev_state(self, new_state):
         # make the new state to be prev state

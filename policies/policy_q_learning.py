@@ -7,7 +7,7 @@ import tensorflow as tf
 
 
 N_SAMPLES = 1
-BATCH_SIZE = 8
+BATCH_SIZE = 1024
 
 np.random.seed(1231)
 from policies import base_policy as bp
@@ -19,7 +19,7 @@ NUM_ACTIONS = 7
 STATE_DIM = 7 * 6 * 2  # board size
 INPUT_SIZE = STATE_DIM
 FC1 = 64
-FC2 = 32
+FC2 = 64
 FC3 = 32
 EMPTY_VAL = 0
 
@@ -294,7 +294,7 @@ class QLearningAgent(bp.Policy):
             self.B3 = tf.Variable(tf.constant(model[5]))
             self.W_LAST_LAYER = tf.Variable(tf.constant(model[6]))
             self.B_LAST_LAYER = tf.Variable(tf.constant(model[7]))
-            self.log("Model has been load sucessfully!")
+            self.log("The Model has been loaded successfully!")
         except:
             self.W1 = weight_variable([INPUT_SIZE, FC1], name="W1")
             self.B1 = bias_variable([FC1])
@@ -314,7 +314,7 @@ class QLearningAgent(bp.Policy):
         return tf.boolean_mask(self.output, mask)
 
     def init_run(self, save_path="policy_302867833.model.pkl", folder="/tmp/model_connect_4/", l_rate=LEANING_RATE,
-                 session=None, epsilon=0.2):
+                 session=None, epsilon=1):
         self.log("Creating model...layers={}|{}|{},batch={}lr={}".format(FC1, FC2, FC3, BATCH_SIZE, l_rate))
         self.learning_rate = LEANING_RATE
         self.batch_size = BATCH_SIZE
@@ -381,25 +381,22 @@ class QLearningAgent(bp.Policy):
             self.session.run(self.train_op, feed_dict=feed_dict)
 
             # Learn the model how to block the opponent
-            is_win_flag = np.argwhere(batch.r == 0)
+            is_win_flag = np.argwhere(batch.r == 1)
             won_batch = batch[is_win_flag]
             if len(won_batch) > 0:
                 flip_s1 = inverse_last_move(won_batch.s1)
-                flip_s2 = inverse_last_move(won_batch.s2)
-                self.db.store(flip_s1,flip_s2,won_batch.a.reshape(-1,), won_batch.r.reshape(-1,)) # a change should
-                # be check to reduce timeouts
+                feed_dict = {
+                    self.input: flip_s1,
+                    self.actions: won_batch.a.reshape(-1,),
+                    self.q_estimation: q[is_win_flag].reshape(-1,)
+                }
+                self.session.run(self.train_op, feed_dict=feed_dict)
 
-                # feed_dict = {
-                #     self.input: flip_s1,
-                #     self.actions: won_batch.a.reshape(-1,),
-                #     self.q_estimation: q[is_win_flag].reshape(-1,)
-                # }
-                # self.session.run(self.train_op, feed_dict=feed_dict)
-
-            if (round + 1) % 200 == 0:
-                self.epsilon = max(self.epsilon / 2, 1e-3)
-                self.log("round={}|rewards={}|q={}|v={}|action={}|memory={}|".format(round, batch.r, q, v, batch.a,
-                                                                          self.db.n_items))
+            if (round + 1) % 500 == 0:
+                self.epsilon = max(self.epsilon / 2, 0.10)
+                self.log("round={}|rewards={}|q={}|v={}|action={}|memory={}|eps={}".format(round, batch.r, q, v,
+                                                                                           batch.a,
+                                                                          self.db.n_items,self.epsilon))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
         legal_actions = self.get_legal_moves(new_state)

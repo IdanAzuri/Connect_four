@@ -5,32 +5,32 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 
+
+N_SAMPLES = 1
+BATCH_SIZE = 512
+
 np.random.seed(1231)
 from policies import base_policy as bp
 
-LEANING_RATE = 5e-3
-BATCH_SIZE = 20
-GAMMA_FACTOR = 0.9
+
+LEANING_RATE = 1e-2
+GAMMA_FACTOR = 0.99
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6 * 2  # board size
 INPUT_SIZE = STATE_DIM
-FC1 = 128
+FC1 = 64
 FC2 = 64
 FC3 = 32
 EMPTY_VAL = 0
-PLAYER1_ID = 1
-PLAYER2_ID = 2
+
 ROWS = 6
 COLS = 7
 WIN_MASK = np.ones(4)
 
 
-def inverse_last_move(states):
-    s1, action, reward, s2 = states
+def inverse_last_move(s1):
     flip_s1 = s1 * 2 % 3
-    flip_s2 = s2 * 2 % 3
-    reward *= -1
-    return [flip_s1, action, reward, flip_s2]
+    return flip_s1.reshape(-1, INPUT_SIZE)
 
 
 def check_for_win(board, player_id, col):
@@ -86,93 +86,84 @@ def make_move(board, action, player_id):
     return new_board
 
 
-class ExperienceReplay(object):
+class ReplayDB:
+    """Holds previous games and allows sampling random combinations of
+        (state, action, new state, reward)
     """
-    During gameplay all the experiences < s, a, r, s’ > are stored in a replay memory.
-    In training, batches of randomly drawn experiences are used to generate the input and target for training.
-    """
 
-    def __init__(self, max_memory=5e6, discount=GAMMA_FACTOR):
-        self.max_memory = max_memory
-        self.memory = []
-        self.discount = discount
-        self.memory_last_move = []  # Balancing the dataset
-        self.max_memory_last_move = max_memory
-        self.memory_len = 0
+    def __init__(self, state_dim, db_size):
+        """Create new DB of size db_size."""
 
-    def store(self, states):
-        # Save a state to memory, game over = 1 otherwise 0
-        self.memory.append([states])
-        # We don't want to store infinite memories, so if we have too many, we just delete the oldest one
-        if len(self.memory) > self.max_memory:
-            del self.memory[:100]
+        self.state_dim = state_dim
+        self.db_size = int(db_size)
+        self._empty_state = np.zeros((1, self.state_dim))
 
-    def store_last_move(self, states):
-        # Save a state to memory, game over = 1 otherwise 0
-        # will learn also the inverse last move
-        # TODO - need to decide if to implement
-        # flip_states = inverse_last_move(states)
-        # self.memory_last_move.append([flip_states])
-        self.memory_last_move.append([states])
-        # We don't want to store infinite memories, so if we have too many, we just delete the oldest one
-        if len(self.memory_last_move) > self.max_memory:
-            del self.memory_last_move[:100]
+        self.DB = np.rec.recarray(self.db_size, dtype=[
+            ("s1", np.float32, self.state_dim),
+            ("s2", np.float32, self.state_dim),
+            ("a", np.int32),
+            ("r", np.int32)
+        ])
+        self.clear()
 
-    def get_batch(self, batch_size=32):
-        """
-        Here we load one transition <s, a, r, s’> from memory
+    def clear(self):
+        """Remove all entries from the DB."""
 
-        :param batch_size:
+        self.index = 0
+        self.n_items = 0
+        self.full = False
 
-        :return: a permutation of:
-        state_t: prev state s
-        action_t: action taken a
-        reward_t: reward earned r
-        state_tp1: the state that followed s’
-        return state_t, action_t, reward_t, state_tp1
-        """
-        self.memory_len = len(self.memory)
-        shuffle_indices = np.random.permutation(min(self.memory_len, batch_size, int(batch_size)))
-        return np.asarray(self.memory)[shuffle_indices]
+    def store(self, s1, s2, a, r):
+        """Store new samples in the DB."""
 
-    def get_last_move_batch(self, batch_size=32):
-        """
-        Here we load one transition <s, a, r, s’> from memory
+        n = s1.shape[0]
+        if self.index + n > self.db_size:
+            self.full = True
+            l = self.db_size - self.index
+            if l > 0:
+                self.store(s1[:l], s2[:l], a[:l], r[:l])
+            self.index = 0
+            if l < n:
+                self.store(s1[l:], s2[l:], a[l:], r[l:])
+        else:
+            v = self.DB[self.index: self.index + n]
+            v.s1 = s1
+            v.s2 = s2
+            v.a = a
+            v.r = r
+            self.index += n
 
-        :param batch_size:
+        self.n_items = min(self.n_items + n, self.db_size)
 
-        :return: a permutation of:
-        state_t: prev state s
-        action_t: action taken a
-        reward_t: reward earned r
-        state_tp1: the state that followed s’
-        return state_t, action_t, reward_t, state_tp1
-        """
-        last_move_len = len(self.memory_last_move)
-        last_move_shuffle_indices = np.random.permutation(min(last_move_len, int(batch_size)))
-        return np.asarray(self.memory_last_move)[last_move_shuffle_indices]
+    def sample(self, sample_size=None):
+        """Get a random sample from the DB."""
 
-    def get_balanced_batch(self, batch_size=32):
-        """
-        Get balanced last move samples and regular samples
-        :param batch_size:
-        :return: 2 batches
-        """
-        batch_size /= 2  # divding batch size equally
-        batch_samples = []
-        last_move_len = len(self.memory_last_move)
-        self.memory_len = len(self.memory)
+        if self.full:
+            db = self.DB
+        else:
+            db = self.DB[:self.index]
 
-        # sampling batch/2 last move states
-        last_move_shuffle_indices = np.random.permutation(min(last_move_len, int(batch_size)))
-        batch_samples.append(np.asarray(self.memory_last_move)[last_move_shuffle_indices])
+        if (sample_size is None) or (sample_size > self.n_items):
+            return db
+        else:
+            return np.rec.array(np.random.choice(db, sample_size, False))
 
-        # sampling batch/2 regular game
-        shuffle_indices = np.random.permutation(min(int(batch_size), self.memory_len))
-        np.random.shuffle(shuffle_indices)  # get shuffled batch
-        batch_samples.append(np.asarray(self.memory)[shuffle_indices])
+    def iter_samples(self, sample_size, n_samples):
+        """Iterate over random samples from the DB."""
 
-        return np.asarray(batch_samples)
+        if sample_size == 0:
+            sample_size = self.n_items
+
+        ind = self.n_items
+        for i in range(n_samples):
+            end = ind + sample_size
+            if end > self.n_items:
+                ind = 0
+                end = sample_size
+                p = np.random.permutation(self.n_items)
+                db = np.rec.array(self.DB[p])
+            yield db[ind: end]
+            ind = end
 
 
 # Helper functions
@@ -192,7 +183,8 @@ def reshape_double_board(state):
     b_1 = state % 2
     b_2 = state - b_1
     new_board = np.concatenate([b_1, b_2], axis=1)
-    return new_board
+
+    return new_board.reshape(-1, 84)
 
 
 class Policy_302867833(bp.Policy):
@@ -201,9 +193,9 @@ class Policy_302867833(bp.Policy):
         # make the new state to be prev state
         prev_state = new_state
         legal_actions = self.get_legal_moves(new_state)
-        random_move = np.random.permutation(legal_actions)[0]
+        random_move = np.random.choice(legal_actions)
         generated_state = make_move(prev_state, int(random_move), self.id)
-        reward = int(check_for_win(generated_state, self.id, int(random_move)))
+        reward = int(check_for_win(generated_state, self.id, random_move))
 
         return prev_state, random_move, reward, generated_state
 
@@ -213,8 +205,7 @@ class Policy_302867833(bp.Policy):
         X_input = tf.reshape(X_input, [-1, INPUT_SIZE])
         Y1 = tf.nn.relu(tf.matmul(X_input, self.W1) + self.B1)
         Y2 = tf.nn.relu(tf.matmul(Y1, self.W2) + self.B2)
-        Y3 = tf.nn.sigmoid(tf.matmul(Y2, self.W3) + self.B3)
-        # Y4 = tf.nn.tanh(tf.matmul(Y3, self.W4) + self.B4)
+        Y3 = tf.nn.tanh(tf.matmul(Y2, self.W3) + self.B3)
         Y_logitis = tf.matmul(Y3, self.W_LAST_LAYER) + self.B_LAST_LAYER
         predict = tf.argmax(Y_logitis, 1)
 
@@ -231,6 +222,7 @@ class Policy_302867833(bp.Policy):
             self.B3 = tf.Variable(tf.constant(model[5]))
             self.W_LAST_LAYER = tf.Variable(tf.constant(model[6]))
             self.B_LAST_LAYER = tf.Variable(tf.constant(model[7]))
+            self.log("The Model has been loaded successfully from: {}".format(self.load_from))
         except:
             self.W1 = weight_variable([INPUT_SIZE, FC1], name="W1")
             self.B1 = bias_variable([FC1])
@@ -238,10 +230,9 @@ class Policy_302867833(bp.Policy):
             self.B2 = bias_variable([FC2])
             self.W3 = weight_variable([FC2, FC3], name="W3")
             self.B3 = bias_variable([FC3])
-            # W4 = weight_variable([FC3, FC4], name="W4")
-            # B4 = bias_variable([FC4])
             self.W_LAST_LAYER = weight_variable([FC3, NUM_ACTIONS], name="W_LAST_LAYER")
             self.B_LAST_LAYER = bias_variable([NUM_ACTIONS])
+            self.log("Model not found, initializing random weights.")
 
     def take(self, indices):
         """Return an operation that takes values from network outputs.
@@ -251,16 +242,12 @@ class Policy_302867833(bp.Policy):
                           on_value=True, off_value=False, axis=-1)
         return tf.boolean_mask(self.output, mask)
 
-    def init_run(self, save_path="test_a1.pkl", folder="/tmp/model_connect_4/", l_rate=LEANING_RATE, session=None, epsilon=0.1):
+    def init_run(self, l_rate=LEANING_RATE, session=None, epsilon=1):
         self.log("Creating model...layers={}|{}|{},batch={}lr={}".format(FC1, FC2, FC3, BATCH_SIZE, l_rate))
         self.learning_rate = LEANING_RATE
-        self.wins = 0
-        # self.save_to = save_path
-        self.model_folder = folder
-        if self.save_to is None:
-            self.save_to = 'policy_302867833.model.pkl'
-        self.load_from = "models/" + self.save_to
+        self.batch_size = BATCH_SIZE
         self.epsilon = epsilon
+        self.db = ReplayDB(INPUT_SIZE, 5e5)
         self.g = tf.Graph()
         with self.g.as_default():
             self.saver = None
@@ -271,110 +258,110 @@ class Policy_302867833(bp.Policy):
             self.output, self.output_argmax = self.deep_nn(self.input)
             self.output_max = tf.reduce_max(self.output, axis=1)
             self.q_values = self.take(self.actions)
-            self.q_estimation = tf.placeholder(tf.float32, (None,),
-                                               name="q_estimation")
+            self.q_estimation = tf.placeholder(tf.float32, (None,), name="q_estimation")
             self.loss = tf.reduce_sum(tf.square(self.q_estimation - self.q_values))
 
             self.optimizer = tf.train.AdamOptimizer(learning_rate=l_rate)
             self.train_op = self.optimizer.minimize(self.loss)
             self.session = tf.Session()
             self.session.run(tf.global_variables_initializer())
-            # self.load(None)
-
-            self.ex_replay = ExperienceReplay()
 
     def cast_string_args(self, policy_args):
         # Example
-        policy_args['save_to'] = str(policy_args['save_to']) if 'save_to' in policy_args else 'policy_302867833.model.pkl'
+        policy_args['save_to'] = str(
+            policy_args['save_to']) if 'save_to' in policy_args else 'policy_302867833.model.pkl'
+        policy_args['load_from'] = str(policy_args['load_from']) if 'load_from' in policy_args else \
+            "models/" + 'policy_302867833.model.pkl'
         return policy_args
 
     def predict_max(self, inputs_feed):
         """Return max on NN outputs."""
         self.output_max = tf.reduce_max(self.output, axis=1)
-        out_max = self.session.run(self.output_max, feed_dict={self.input: inputs_feed.reshape(-1, INPUT_SIZE)})
+        out_max = self.session.run(self.output_max, feed_dict={self.input: inputs_feed})
         return out_max
 
     def learn(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        learn_inverse_flag = False
-        self.batch_size = BATCH_SIZE
         if prev_state is not None and new_state is not None:
             new_state = reshape_double_board(new_state)
             prev_state = reshape_double_board(prev_state)
-            self.ex_replay.store_last_move([prev_state, prev_action, reward, new_state])
+            self.db.store(prev_state, new_state, prev_action, reward)
+            self.db.store(prev_state, new_state, prev_action, reward)  # saving twice end of the game
 
-        x_batces_generator = self.ex_replay.get_balanced_batch(batch_size=self.batch_size)
+        x_batces_generator = self.db.iter_samples(min(self.db.n_items, self.batch_size), N_SAMPLES)
         for batch in x_batces_generator:
-            for j, sample in enumerate(batch):
-                s1, action, reward, s2 = sample.reshape(4, )
-                if s1 is None:
-                    break
-                v = self.predict_max(s2)
-                # t1, t2 = np.split(s1, 2, axis=1)  # recovering original board
-                # legal_actions = self.get_legal_moves(t1 + t2)
-                # if action not in legal_actions:
-                #     self.log("PUNISHED FOR ACTION ={}".format(action))
-                #     q = -1 + (GAMMA_FACTOR * v)  # penalize for illegal action
-                if reward == 1:  # win or lose the game
-                    q = np.asarray([reward])
-                    learn_inverse_flag = True
-                else:
-                    q = reward + (GAMMA_FACTOR * v)
+            v = self.predict_max(batch.s2)
+            mask_game_not_over = np.where(np.abs(batch.r) < 1, 1, 0)
 
+            q = batch.r + (mask_game_not_over * GAMMA_FACTOR * v)
+
+            # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
+            feed_dict = {
+                self.input: batch.s1,
+                self.actions: batch.a,
+                self.q_estimation: q
+            }
+            self.session.run(self.train_op, feed_dict=feed_dict)
+
+            # Learn the model how to block the opponent
+            is_win_flag = np.argwhere(batch.r == 1)
+            won_batch = batch[is_win_flag]
+            if len(won_batch) > 0:
+                flip_s1 = inverse_last_move(won_batch.s1)
                 feed_dict = {
-                    self.input: s1.reshape(-1, INPUT_SIZE),
-                    self.actions: action.reshape(-1, ),
-                    self.q_estimation: q.reshape(-1, )
+                    self.input: flip_s1,
+                    self.actions: won_batch.a.reshape(-1, ),
+                    self.q_estimation: q[is_win_flag].reshape(-1, )
                 }
-
-                # self.log("rewards={},q={},v={},actions={}".format(reward, q, v, action))
-
-                # Train on Q'=(s', a') ; s'-new_state, a'-predicted action
                 self.session.run(self.train_op, feed_dict=feed_dict)
-                if learn_inverse_flag:
-                    # s1, action, reward, s2
-                    flip_s1, action, reward, flip_s2 = inverse_last_move([s1, action, reward, s2])
-                    feed_dict = {
-                        self.input: flip_s1.reshape(-1, INPUT_SIZE),
-                        self.actions: action.reshape(-1, ),
-                        self.q_estimation: q.reshape(-1, )
-                    }
-                    self.session.run(self.train_op, feed_dict=feed_dict)
-                    learn_inverse_flag = False
-                    if (round + 1) % 500 == 0:
-                        self.epsilon = max(self.epsilon / 2, 1e-4)
 
-                # self.log("Iteration: {}/{}, round:{}, memory size={}".format(j, self.batch_size, round, self.ex_replay.memory_len))
+            if (round + 1) % 500 == 0:
+                self.epsilon = max(self.epsilon / 2, 0.10)
+                self.log("round={}|rewards={}|q={}|v={}|action={}|memory={}|eps={}".format(round, batch.r, q, v,
+                                                                                           batch.a,
+                                                                                           self.db.n_items,
+                                                                                           self.epsilon))
 
     def act(self, round, prev_state, prev_action, reward, new_state, too_slow):
-        legal_actions, new_state, prev_action, prev_state, reward = self.validate_input(new_state, prev_action, prev_state, reward)
-        new_state = reshape_double_board(new_state)
-        prev_state = reshape_double_board(prev_state)
-        action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, INPUT_SIZE)})[0]
+        legal_actions = self.get_legal_moves(new_state)
         if self.mode == 'test':
+            action = self.session.run(self.output_argmax,
+                                      feed_dict={self.input: reshape_double_board(new_state)})[0]
             if action in legal_actions:
                 return action
             else:
                 return np.random.choice(legal_actions)
-        else:
-            self.ex_replay.store([prev_state, prev_action, reward, new_state])
-            action = self.session.run(self.output_argmax, feed_dict={self.input: new_state.reshape(-1, INPUT_SIZE)})[0]
+        else:  # train
+            new_state, prev_action, prev_state, reward = self.handle_and_store_input(new_state, prev_action, prev_state,
+                                                                                     reward)
+
+            action = self.session.run(self.output_argmax, feed_dict={self.input: new_state})[0]
             if np.random.random() < self.epsilon:
-                return np.random.choice(legal_actions)
-            else:
+                action = np.random.choice(legal_actions)
+                return action
+            if action in legal_actions:
                 return action
 
-    def validate_input(self, new_state, prev_action, prev_state, reward):
-        legal_actions = np.arange(start=0, stop=6)
-        if prev_state is None and np.count_nonzero(new_state) > 0:
-            prev_state, prev_action, reward, new_state = self.manage_no_prev_state(new_state)
-            legal_actions = self.get_legal_moves(new_state)
-        elif prev_state is None:
-            prev_state = np.zeros_like(new_state)
-        return legal_actions, new_state, prev_action, prev_state, reward
+            return np.random.choice(legal_actions)
+
+    def handle_and_store_input(self, new_state, action, prev_state, reward):
+        if prev_state is None:
+            if np.count_nonzero(new_state) > 7:  # maybe there is a win -> dont save
+                new_state = reshape_double_board(new_state)
+                return new_state, action, prev_state, reward
+            if np.count_nonzero(new_state) > 0:  # generate and learn new state
+                prev_state, action, reward, new_state = self.manage_no_prev_state(new_state)
+            else:  # np.count_nonzero(new_state)  == 0
+                prev_state = np.zeros_like(new_state)
+
+        new_state = reshape_double_board(new_state)
+        prev_state = reshape_double_board(prev_state)
+        if action is not None:
+            self.db.store(prev_state, new_state, action, reward)
+
+        return new_state, action, prev_state, reward
 
     def load(self, path=None):
         """Load weights or init variables if path==None."""
-        # path="/tmp/model_connect_4/"
         if self.saver is None:
             self.saver = tf.train.Saver(max_to_keep=None)
 
@@ -391,22 +378,6 @@ class Policy_302867833(bp.Policy):
             self.saver.restore(self.session, fname)
             self.log("Model has been loaded successfully, {},{}".format(fname, int(newest.parts[-2])))
             return int(newest.parts[-2])
-
-    def save_model_old(self):
-        """Save the current graph."""
-        if self.saver is None:
-            with self.g.as_default():
-                self.saver = tf.train.Saver(max_to_keep=None)
-
-        p = Path(self.save_to)
-        p.mkdir(parents=True, exist_ok=True)
-        fname = str(p / "{}{}".format(self.id, self.ex_replay.memory_len) / "model.ckpt")
-        self.saver.save(self.session, fname)
-        self.log("Model saved in file: %s" % self.save_to)
-        self.log("moves_{}_player_{}_layers={}_{}_{}_batch={}lr_{}".format(self.ex_replay.memory_len, self.id, FC1, FC2, FC3,
-                                                                           BATCH_SIZE, self.learning_rate))
-
-        return
 
     def save_model(self):
         return [self.session.run(self.W1), self.session.run(self.B1),
