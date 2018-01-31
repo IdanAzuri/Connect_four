@@ -13,8 +13,8 @@ np.random.seed(1231)
 from policies import base_policy as bp
 
 
-LEANING_RATE = 1e-2
-GAMMA_FACTOR = 0.99
+LEANING_RATE = 5e-4
+GAMMA_FACTOR = 0.9
 NUM_ACTIONS = 7
 STATE_DIM = 7 * 6 * 2  # board size
 INPUT_SIZE = STATE_DIM
@@ -315,7 +315,7 @@ class Policy_302867833(bp.Policy):
                 self.session.run(self.train_op, feed_dict=feed_dict)
 
             if (round + 1) % 500 == 0:
-                self.epsilon = max(self.epsilon / 2, 0.10)
+                self.epsilon = max(self.epsilon / 2, 0.05)
                 self.log("round={}|rewards={}|q={}|v={}|action={}|memory={}|eps={}".format(round, batch.r, q, v,
                                                                                            batch.a,
                                                                                            self.db.n_items,
@@ -327,6 +327,7 @@ class Policy_302867833(bp.Policy):
             action = self.session.run(self.output_argmax,
                                       feed_dict={self.input: reshape_double_board(new_state)})[0]
             if action in legal_actions:
+                print(action)
                 return action
             else:
                 return np.random.choice(legal_actions)
